@@ -1,8 +1,3 @@
-"""
-Interior Design Organization App - Flask Backend
-Handles multi-image uploads, conversational AI, and PDF report generation
-"""
-
 import os
 import io
 import json
