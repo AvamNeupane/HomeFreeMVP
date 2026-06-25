@@ -411,6 +411,46 @@ def generate_area_recommendations(
         return None, f"Recommendation error: {str(e)}"
 
 
+def format_measurements_summary(session_data: Dict) -> str:
+    """Build a markdown summary of all captured measurements."""
+    lines = ["## Space Measurements Summary\n"]
+
+    measurements = session_data.get('measurements', {})
+    if not measurements:
+        lines.append("No measurements were recorded during this session.\n")
+        return ''.join(lines)
+
+    for area_key, data in measurements.items():
+        area_name = data.get('area_name', area_key)
+        unit = data.get('unit', 'in')
+        unit_label = 'inches' if unit == 'in' else 'centimeters'
+        profiles = data.get('shelf_profiles', [])
+
+        if data.get('skipped'):
+            lines.append(f"### {area_name}\n")
+            lines.append("*Measurements were skipped for this area.*\n\n")
+            continue
+
+        if not profiles:
+            continue
+
+        lines.append(f"### {area_name}\n")
+        lines.append(f"Unit: {unit_label}\n\n")
+
+        for idx, profile in enumerate(profiles, start=1):
+            width = profile.get('width', '?')
+            depth = profile.get('depth', '?')
+            height = profile.get('height', '?')
+            count = profile.get('count', 1)
+            lines.append(
+                f"- **Size {idx}:** {width} × {depth} × {height} "
+                f"({unit_label}, W × D × H clearance) — **{count}** shelf(s)\n"
+            )
+        lines.append("\n")
+
+    return ''.join(lines)
+
+
 def generate_final_report(session_data: Dict) -> Tuple[Optional[str], Optional[str]]:
     """
     Generate comprehensive final report with all recommendations.
@@ -447,13 +487,18 @@ def generate_final_report(session_data: Dict) -> Tuple[Optional[str], Optional[s
         
         if not room_summaries:
             return None, "No room summaries available to generate report"
-        
+
+        measurements_summary = format_measurements_summary(session_data)
+
         # Create comprehensive prompt
         prompt = f"""
         You are creating a final comprehensive home organization report.
         
         Here are the individual area recommendations:
         {''.join(room_summaries)}
+
+        Here are the space measurements captured by the user:
+        {measurements_summary}
         
         Create a professional, well-structured final report with these sections:
         
@@ -461,6 +506,10 @@ def generate_final_report(session_data: Dict) -> Tuple[Optional[str], Optional[s
         
         ## Executive Summary
         [2-3 paragraph overview of the entire project]
+        
+        ## Space Measurements Summary
+        [Include ALL measurement data from above exactly — list each area with shelf sizes and counts.
+        If no measurements were taken, note that and suggest measuring before purchasing organizers.]
         
         ## Room-by-Room Plan
         [Expand on each room with detailed steps, maintaining the structure above but adding:
@@ -496,6 +545,11 @@ def generate_final_report(session_data: Dict) -> Tuple[Optional[str], Optional[s
         
         if len(report) < 100:
             return None, "Generated report was too short"
+
+        # Always append structured measurements so they appear in the final summary
+        measurements_block = format_measurements_summary(session_data)
+        if measurements_block.strip():
+            report = f"{report}\n\n---\n\n{measurements_block}"
         
         logger.info(f"✅ Final report generated ({len(report)} chars)")
         
@@ -660,6 +714,7 @@ def create_session():
             'id': session_id,
             'created_at': datetime.now(),
             'rooms': [],
+            'measurements': {},
             'current_room_index': 0,
             'current_area_index': 0
         }
@@ -829,6 +884,12 @@ def analyze_area():
             'question': result.get('question', ''),
             'context': result.get('context', '')
         }
+
+        # Attach measurements if previously saved for this area
+        area_measurements = session.get('measurements', {}).get(area_name)
+        if area_measurements:
+            area_data['measurements'] = area_measurements
+
         current_room['areas'].append(area_data)
         
         logger.info(f"✅ Generated question for {area_name}")
@@ -844,6 +905,94 @@ def analyze_area():
         return jsonify({
             'success': False,
             'error': f"Analysis failed: {str(e)}"
+        }), 500
+
+
+@app.route('/area/measurements', methods=['POST'])
+def save_area_measurements():
+    """Save shelf measurements for an area (stored for final report summary)."""
+    try:
+        data = request.json
+
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'No JSON data provided'
+            }), 400
+
+        session_id = data.get('session_id')
+        area_name = data.get('area_name')
+        room_type = data.get('room_type')
+        unit = data.get('unit', 'in')
+        shelf_profiles = data.get('shelf_profiles', [])
+        skipped = data.get('skipped', False)
+
+        logger.info(f"📥 Received measurements: session={session_id}, area={area_name}")
+
+        if not session_id or session_id not in sessions:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid session'
+            }), 400
+
+        if not area_name:
+            return jsonify({
+                'success': False,
+                'error': 'Area name required'
+            }), 400
+
+        if unit not in ('in', 'cm'):
+            return jsonify({
+                'success': False,
+                'error': 'Unit must be "in" or "cm"'
+            }), 400
+
+        if not skipped:
+            for idx, profile in enumerate(shelf_profiles):
+                for field in ('width', 'depth', 'height', 'count'):
+                    if field not in profile or profile[field] is None:
+                        return jsonify({
+                            'success': False,
+                            'error': f'Profile {idx + 1} missing {field}'
+                        }), 400
+                    if field == 'count':
+                        if not isinstance(profile[field], int) or profile[field] < 1:
+                            return jsonify({
+                                'success': False,
+                                'error': f'Profile {idx + 1} count must be at least 1'
+                            }), 400
+                    elif not isinstance(profile[field], (int, float)) or profile[field] <= 0:
+                        return jsonify({
+                            'success': False,
+                            'error': f'Profile {idx + 1} {field} must be greater than 0'
+                        }), 400
+
+        session = sessions[session_id]
+        if 'measurements' not in session:
+            session['measurements'] = {}
+
+        session['measurements'][area_name] = {
+            'area_name': area_name,
+            'room_type': room_type,
+            'unit': unit,
+            'shelf_profiles': shelf_profiles,
+            'skipped': skipped,
+            'saved_at': datetime.now().isoformat()
+        }
+
+        logger.info(f"✅ Saved measurements for {area_name} ({len(shelf_profiles)} profile(s))")
+
+        return jsonify({
+            'success': True,
+            'area_name': area_name,
+            'profile_count': len(shelf_profiles)
+        }), 200
+
+    except Exception as e:
+        logger.error(f"❌ Measurements save failed: {str(e)}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': f"Failed to save measurements: {str(e)}"
         }), 500
 
 
