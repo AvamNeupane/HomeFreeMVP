@@ -1,0 +1,36 @@
+{
+  "name": "frontend",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web"
+  },
+  "dependencies": {
+    "@expo-google-fonts/libre-baskerville": "^0.4.3",
+    "@expo-google-fonts/montserrat": "^0.4.2",
+    "@react-native-async-storage/async-storage": "^2.2.0",
+    "axios": "^1.13.2",
+    "expo": "~54.0.30",
+    "expo-camera": "^17.0.10",
+    "expo-file-system": "^19.0.21",
+    "expo-font": "^14.0.10",
+    "expo-image-picker": "^17.0.10",
+    "expo-sharing": "^14.0.8",
+    "expo-speech": "^14.0.8",
+    "expo-splash-screen": "^31.0.13",
+    "expo-status-bar": "~3.0.9",
+    "expo-updates": "~29.0.16",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-dotenv": "^3.4.11",
+    "react-native-markdown-display": "^7.0.2",
+    "react-native-pdf": "^7.0.3"
+  },
+  "private": true,
+  "devDependencies": {
+    "babel-preset-expo": "^54.0.10"
+  }
+}

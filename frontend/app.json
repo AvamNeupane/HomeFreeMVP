@@ -1,0 +1,64 @@
+{
+  "expo": {
+    "name": "HomeOrganizer",
+    "slug": "home-organizer",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.homeorganizer.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "This app needs camera access to take photos of your rooms for organization analysis.",
+        "NSPhotoLibraryUsageDescription": "This app needs photo library access to select and save room photos.",
+        "NSPhotoLibraryAddUsageDescription": "This app needs permission to save your organization reports."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "package": "com.homeorganizer.app",
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Home Organizer to access your photos.",
+          "cameraPermission": "Allow Home Organizer to use your camera."
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "15a43cf3-f338-4d2d-a31a-32c389f8255b"
+      }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/15a43cf3-f338-4d2d-a31a-32c389f8255b"
+    },
+    "owner": "avamn"
+  }
+}
