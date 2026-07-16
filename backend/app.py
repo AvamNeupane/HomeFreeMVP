@@ -16,6 +16,7 @@ from werkzeug.exceptions import RequestEntityTooLarge
 
 import google.generativeai as genai
 from PIL import Image
+from session_store import SQLiteSessionStore
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
@@ -66,8 +67,11 @@ except Exception as e:
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs(app.config['PDF_FOLDER'], exist_ok=True)
 
-# In-memory session storage (use Redis/database for production)
-sessions = {}
+# Persistent project/session storage (SQLite-backed; survives server restarts).
+# Keeps the exact same dict-like access pattern (sessions[id], `in`, del, .items(),
+# len()) that the rest of this file already uses, so no other function needed
+# to change its logic — see session_store.py.
+sessions = SQLiteSessionStore()
 
 
 def get_local_ip() -> str:
@@ -190,15 +194,17 @@ def detect_room_items(images: List[bytes], room_type: str) -> Tuple[Optional[Dic
         
         Return ONLY a JSON array of objects with this exact structure:
         [
-          {{"name": "Closet", "reason": "Contains clothes and needs organization"}},
-          {{"name": "Dresser", "reason": "Drawers appear cluttered"}},
-          {{"name": "Nightstand", "reason": "Surface has multiple items"}}
+          {{"name": "Closet", "confidence": 92, "reason": "Contains clothes and needs organization"}},
+          {{"name": "Dresser", "confidence": 85, "reason": "Drawers appear cluttered"}},
+          {{"name": "Nightstand", "confidence": 74, "reason": "Surface has multiple items"}}
         ]
         
         Rules:
         - Return 2-4 items maximum
         - Use simple, clear names (1-2 words)
         - Be specific to what you see
+        - "confidence" is an integer 0-100 representing how certain you are that
+          this area is genuinely present and correctly identified in the photo
         - Return ONLY the JSON array, no other text
         """
         
@@ -237,8 +243,22 @@ def detect_room_items(images: List[bytes], room_type: str) -> Tuple[Optional[Dic
         for item in items:
             if not isinstance(item, dict) or 'name' not in item:
                 return None, "Invalid item format in AI response"
+
+            # Confidence is required by the prompt, but be defensive: coerce
+            # missing/invalid values to a conservative default rather than
+            # failing the whole detection over one malformed field.
+            confidence = item.get('confidence')
+            if not isinstance(confidence, (int, float)):
+                logger.warning(
+                    f"⚠️  Missing/invalid confidence for '{item.get('name')}', defaulting to 50"
+                )
+                confidence = 50
+            item['confidence'] = max(0, min(100, int(confidence)))
         
-        logger.info(f"✅ Detected {len(items)} items: {[i['name'] for i in items]}")
+        logger.info(
+            f"✅ Detected {len(items)} items: "
+            f"{[(i['name'], i['confidence']) for i in items]}"
+        )
         
         return {'items': items}, None
         
@@ -261,10 +281,12 @@ def analyze_specific_area(
     
     Returns:
         Dict with question for user
+
+    NOTE (Task 3): `images` may legitimately be an empty list when the user
+    chooses "Skip close-ups" in AreaPhotoScreen. In that case we fall back to
+    a text-only prompt built from area_name/room_type alone, instead of
+    rejecting the request outright.
     """
-    if not images:
-        return None, "No images provided"
-    
     if not area_name:
         return None, "Area name not specified"
     
@@ -274,7 +296,7 @@ def analyze_specific_area(
             return None, "Failed to initialize Gemini AI"
         
         pil_images = []
-        for idx, img_data in enumerate(images):
+        for idx, img_data in enumerate(images or []):
             try:
                 if not img_data or len(img_data) == 0:
                     continue
@@ -282,32 +304,52 @@ def analyze_specific_area(
                 pil_images.append(img)
             except Exception as e:
                 logger.warning(f"⚠️  Failed to load image {idx}: {e}")
+
+        has_images = len(pil_images) > 0
+
+        if has_images:
+            # Generate contextual question grounded in the close-up photos
+            prompt = f"""
+            You are analyzing the {area_name} in a {room_type.replace('_', ' ')}.
+            
+            Photo types provided: {', '.join(photo_labels) if photo_labels else 'General photos'}
+            
+            Based on what you see, generate ONE specific question to ask the user about their intentions.
+            
+            Examples:
+            - "What are your main goals for organizing this closet?"
+            - "How do you primarily use this dresser?"
+            - "What items do you want to keep easily accessible here?"
+            
+            Return ONLY a JSON object:
+            {{
+              "question": "Your question here",
+              "context": "Brief description of what you see (2-3 sentences)"
+            }}
+            """
+        else:
+            # Text-only fallback: no close-up photos were provided (user chose
+            # to skip). Ask a sensible generic question instead of failing.
+            prompt = f"""
+            The user is organizing the {area_name} in a {room_type.replace('_', ' ')},
+            but chose not to take additional close-up photos of it.
+            
+            Generate ONE general question to ask about their intentions for this
+            area that doesn't depend on visual details you can't see.
+            
+            Examples:
+            - "What are your main goals for organizing this closet?"
+            - "How do you primarily use this dresser?"
+            
+            Return ONLY a JSON object:
+            {{
+              "question": "Your question here",
+              "context": "No close-up photos were provided for this area, so recommendations will be general."
+            }}
+            """
         
-        if not pil_images:
-            return None, "No valid images could be loaded"
-        
-        # Generate contextual question
-        prompt = f"""
-        You are analyzing the {area_name} in a {room_type.replace('_', ' ')}.
-        
-        Photo types provided: {', '.join(photo_labels) if photo_labels else 'General photos'}
-        
-        Based on what you see, generate ONE specific question to ask the user about their intentions.
-        
-        Examples:
-        - "What are your main goals for organizing this closet?"
-        - "How do you primarily use this dresser?"
-        - "What items do you want to keep easily accessible here?"
-        
-        Return ONLY a JSON object:
-        {{
-          "question": "Your question here",
-          "context": "Brief description of what you see (2-3 sentences)"
-        }}
-        """
-        
-        logger.info(f"🤔 Generating question for {area_name}...")
-        response = model.generate_content([prompt] + pil_images)
+        logger.info(f"🤔 Generating question for {area_name} (images={'yes' if has_images else 'no'})...")
+        response = model.generate_content([prompt] + pil_images) if has_images else model.generate_content(prompt)
         
         if not response or not response.text:
             return None, "Gemini returned empty response"
@@ -342,15 +384,65 @@ def analyze_specific_area(
         return None, f"Area analysis error: {str(e)}"
 
 
+def _format_measurement_block(measurement: Optional[Dict]) -> str:
+    """
+    Turn a saved measurement record (as stored by /area/measurements) into a
+    plain-language block for the recommendation prompt. Returns a clear
+    "no measurements" line if none were captured or the user skipped, so the
+    model doesn't invent dimensions.
+    """
+    if not measurement or measurement.get('skipped'):
+        return "No measurements were provided for this area — give general guidance only, and do not invent specific dimensions."
+
+    unit = measurement.get('unit', 'in')
+    unit_label = 'inches' if unit == 'in' else 'centimeters'
+    profiles = measurement.get('shelf_profiles', [])
+    if not profiles:
+        return "No measurements were provided for this area — give general guidance only, and do not invent specific dimensions."
+
+    lines = [f"Measured dimensions for this area (unit: {unit_label}):"]
+    for idx, profile in enumerate(profiles, start=1):
+        width = profile.get('width', '?')
+        depth = profile.get('depth', '?')
+        height = profile.get('height', '?')
+        count = profile.get('count', 1)
+        lines.append(
+            f"  - Size {idx}: {width} x {depth} x {height} {unit_label} "
+            f"(width x depth x height), {count} shelf/shelves this size"
+        )
+    return '\n'.join(lines)
+
+
+def _format_priorities_block(priorities: Optional[List[str]], visual_style: Optional[str]) -> str:
+    """Turn user-selected organization priorities / visual style into a prompt block."""
+    parts = []
+    if priorities:
+        parts.append(f"Organization priorities (in the user's own words/order): {', '.join(priorities)}")
+    if visual_style:
+        parts.append(f"Preferred visual style: {visual_style}")
+    if not parts:
+        return "No specific organization priorities or visual style were selected — balance general best practices."
+    return '\n'.join(parts)
+
+
 def generate_area_recommendations(
     images: List[bytes],
     area_name: str,
     room_type: str,
     user_intention: str,
-    photo_labels: List[str]
+    photo_labels: List[str],
+    measurement: Optional[Dict] = None,
+    priorities: Optional[List[str]] = None,
+    visual_style: Optional[str] = None
 ) -> Tuple[Optional[str], Optional[str]]:
     """
     Generate specific recommendations based on user's stated intention.
+
+    `measurement` is the saved shelf-profile record for this area (or None),
+    and `priorities`/`visual_style` are the user's selections from the
+    organization-priorities step. Both are folded into the prompt so the
+    recommendation is actually personalized by what the user provided,
+    instead of only appearing later in the final PDF summary.
     """
     if not user_intention:
         return None, "User intention not provided"
@@ -368,14 +460,25 @@ def generate_area_recommendations(
                     pil_images.append(Image.open(io.BytesIO(img_data)))
             except:
                 pass
+
+        measurement_block = _format_measurement_block(measurement)
+        priorities_block = _format_priorities_block(priorities, visual_style)
         
         prompt = f"""
         You are an expert home organizer analyzing a {area_name} in a {room_type.replace('_', ' ')}.
         
         Photo types: {', '.join(photo_labels) if photo_labels else 'General photos'}
         User's intention: "{user_intention}"
+
+        {measurement_block}
+
+        {priorities_block}
         
         Provide SPECIFIC, ACTIONABLE recommendations (3-5 steps) to help them achieve their goal.
+        If measured dimensions were given above, your recommendations MUST reference
+        those specific numbers (e.g. bin/shelf sizes that would actually fit) rather
+        than giving generic advice. If no measurements were given, say so is fine and
+        keep the advice general.
         
         Format as a numbered list:
         1. [Specific action with measurements/details]
@@ -489,9 +592,17 @@ def generate_final_report(session_data: Dict) -> Tuple[Optional[str], Optional[s
             return None, "No room summaries available to generate report"
 
         measurements_summary = format_measurements_summary(session_data)
+        priorities_summary = _format_priorities_block(
+            session_data.get('organization_priorities'),
+            session_data.get('visual_style')
+        )
 
         # Create comprehensive prompt
         prompt = f"""
+        The user's stated organization priorities / visual style for this project:
+        {priorities_summary}
+        """
+        prompt += f"""
         You are creating a final comprehensive home organization report.
         
         Here are the individual area recommendations:
@@ -733,6 +844,74 @@ def create_session():
         }), 500
 
 
+@app.route('/projects/<project_id>', methods=['GET'])
+def get_project(project_id):
+    """
+    Fetch a persisted project by id. Same underlying data as `session_id`
+    elsewhere in this file — "project" and "session" refer to the same
+    SQLite-backed record. This is what makes "Save Project" / resume-later
+    real: the data survives a server restart because it's on disk.
+    """
+    try:
+        if project_id not in sessions:
+            return jsonify({
+                'success': False,
+                'error': f'Project not found: {project_id}'
+            }), 404
+
+        return jsonify({
+            'success': True,
+            'project': sessions[project_id]
+        }), 200
+
+    except Exception as e:
+        logger.error(f"❌ Get project failed: {str(e)}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': f"Get project failed: {str(e)}"
+        }), 500
+
+
+@app.route('/projects/<project_id>', methods=['PATCH'])
+def patch_project(project_id):
+    """
+    Shallow-merge arbitrary top-level fields into an existing project
+    (e.g. renaming, updating priorities after the fact). Does not allow
+    creating a new project id via PATCH — use /session/create for that.
+    """
+    try:
+        if project_id not in sessions:
+            return jsonify({
+                'success': False,
+                'error': f'Project not found: {project_id}'
+            }), 404
+
+        updates = request.json
+        if not isinstance(updates, dict):
+            return jsonify({
+                'success': False,
+                'error': 'Request body must be a JSON object of fields to update'
+            }), 400
+
+        project = sessions[project_id]
+        project.update(updates)
+        sessions[project_id] = project
+
+        logger.info(f"✅ Patched project {project_id}: {list(updates.keys())}")
+
+        return jsonify({
+            'success': True,
+            'project': project
+        }), 200
+
+    except Exception as e:
+        logger.error(f"❌ Patch project failed: {str(e)}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': f"Patch project failed: {str(e)}"
+        }), 500
+
+
 @app.route('/room/detect-items', methods=['POST'])
 def detect_items():
     """Detect items in room photos."""
@@ -803,7 +982,9 @@ def detect_items():
             'overview_images': len(images),
             'areas': []
         }
-        sessions[session_id]['rooms'].append(room_data)
+        session = sessions[session_id]
+        session['rooms'].append(room_data)
+        sessions[session_id] = session  # write back — required by SQLiteSessionStore
         
         logger.info(f"✅ Detected {len(result['items'])} items")
         
@@ -858,12 +1039,9 @@ def analyze_area():
                     if len(file_data) > 0:
                         images.append(file_data)
         
-        if not images:
-            return jsonify({
-                'success': False,
-                'error': 'No valid images provided'
-            }), 400
-        
+        # NOTE (Task 3): empty `images` is now a valid case — it means the user
+        # chose "Skip close-ups" in AreaPhotoScreen. analyze_specific_area()
+        # falls back to a text-only prompt when this happens.
         logger.info(f"📸 Analyzing {area_name} with {len(images)} images")
         
         # Analyze and generate question
@@ -891,6 +1069,7 @@ def analyze_area():
             area_data['measurements'] = area_measurements
 
         current_room['areas'].append(area_data)
+        sessions[session_id] = session  # write back — required by SQLiteSessionStore
         
         logger.info(f"✅ Generated question for {area_name}")
         
@@ -979,6 +1158,7 @@ def save_area_measurements():
             'skipped': skipped,
             'saved_at': datetime.now().isoformat()
         }
+        sessions[session_id] = session  # write back — required by SQLiteSessionStore
 
         logger.info(f"✅ Saved measurements for {area_name} ({len(shelf_profiles)} profile(s))")
 
@@ -1010,6 +1190,11 @@ def get_recommendations():
         
         session_id = data.get('session_id')
         user_intention = data.get('user_intention')
+        # Optional: organization priorities / visual style from the priorities
+        # step. If the frontend doesn't send them yet, fall back to whatever
+        # was saved earlier in the session (or none at all).
+        organization_priorities = data.get('organization_priorities')
+        visual_style = data.get('visual_style')
         
         logger.info(f"📥 Received recommendations request: session={session_id}")
         
@@ -1035,6 +1220,20 @@ def get_recommendations():
         
         current_room = session['rooms'][-1]
         current_area = current_room['areas'][-1]
+
+        # Persist priorities/visual style at the session level so later steps
+        # (and the final report) can reuse them even if this request omits them.
+        if organization_priorities is not None:
+            session['organization_priorities'] = organization_priorities
+        if visual_style is not None:
+            session['visual_style'] = visual_style
+        organization_priorities = session.get('organization_priorities')
+        visual_style = session.get('visual_style')
+
+        # Look up any measurements saved earlier for this specific area (Task 1
+        # fix: this used to never be read here, so measurements only ever
+        # showed up in the final PDF, never in the actual recommendation text).
+        area_measurement = session.get('measurements', {}).get(current_area['name'])
         
         # Generate recommendations
         recommendations, error = generate_area_recommendations(
@@ -1042,7 +1241,10 @@ def get_recommendations():
             current_area['name'],
             current_room['type'],
             user_intention,
-            current_area.get('photo_labels', [])
+            current_area.get('photo_labels', []),
+            measurement=area_measurement,
+            priorities=organization_priorities,
+            visual_style=visual_style
         )
         
         if error:
@@ -1054,6 +1256,9 @@ def get_recommendations():
         # Store in session
         current_area['user_intention'] = user_intention
         current_area['recommendations'] = recommendations
+        # Persisting the store object mutated a nested dict in place above;
+        # SQLiteSessionStore requires an explicit __setitem__ to write it back.
+        sessions[session_id] = session
         
         logger.info(f"✅ Generated recommendations for {current_area['name']}")
         
@@ -1122,6 +1327,7 @@ def generate_report():
             'pdf_path': pdf_path,
             'generated_at': datetime.now().isoformat()
         }
+        sessions[session_id] = session  # write back — required by SQLiteSessionStore
         
         logger.info(f"✅ Report generated successfully")
         
