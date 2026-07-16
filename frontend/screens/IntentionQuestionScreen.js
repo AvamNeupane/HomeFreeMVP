@@ -6,6 +6,14 @@
  * can actually use them (see app.py's _format_priorities_block). Without
  * this change, PrioritiesScreen would collect data that never reaches the
  * recommendation prompt.
+ *
+ * CHANGED (keyboard fix): the text input used to be a fixed tall box with
+ * no way to dismiss the keyboard once you started typing. It now:
+ *   - starts smaller (3 lines) and grows as you type, up to a max height,
+ *     instead of always reserving a big empty box
+ *   - has an explicit "Hide Keyboard" control right under the input
+ *   - dismisses the keyboard if you tap anywhere else on the screen
+ * CHANGED (back navigation): added a Back button at the top of the screen.
  */
 
 import React, { useState } from 'react';
@@ -19,14 +27,20 @@ import {
   Platform,
   ScrollView,
   Alert,
-  ActivityIndicator
+  ActivityIndicator,
+  Keyboard,
+  TouchableWithoutFeedback,
+  TouchableOpacity,
 } from 'react-native';
 import Colors from '../constants/Colors';
 import Fonts from '../constants/Fonts';
 import Button from '../components/Button';
+import BackButton from '../components/BackButton';
 
 export default function IntentionQuestionScreen({ 
   goToScreen, 
+  goBack,
+  canGoBack,
   updateData, 
   appData,
   apiBaseUrl,
@@ -38,6 +52,11 @@ export default function IntentionQuestionScreen({
   
   const [userInput, setUserInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [inputHeight, setInputHeight] = useState(70);
+  const [isFocused, setIsFocused] = useState(false);
+
+  const MIN_INPUT_HEIGHT = 70;
+  const MAX_INPUT_HEIGHT = 160;
 
   const handleSubmit = async () => {
     if (!userInput.trim()) {
@@ -50,6 +69,7 @@ export default function IntentionQuestionScreen({
       return;
     }
 
+    Keyboard.dismiss();
     setIsProcessing(true);
 
     try {
@@ -84,7 +104,8 @@ export default function IntentionQuestionScreen({
       const newRecommendation = {
         area: currentItem.name,
         intention: userInput.trim(),
-        recommendations: data.recommendations
+        recommendations: data.recommendations,
+        products: data.products || []
       };
 
       const allRecs = [...(appData.allRecommendations || []), newRecommendation];
@@ -122,50 +143,75 @@ export default function IntentionQuestionScreen({
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardView}
       >
-        <ScrollView contentContainerStyle={styles.scrollContent}>
-          <View style={styles.header}>
-            <Text style={styles.emoji}>💭</Text>
-            <Text style={styles.title}>One quick question...</Text>
-          </View>
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+          <ScrollView
+            contentContainerStyle={styles.scrollContent}
+            keyboardShouldPersistTaps="handled"
+          >
+            <BackButton onPress={goBack} visible={canGoBack} />
 
-          {currentContext && (
-            <View style={styles.contextBox}>
-              <Text style={styles.contextLabel}>What we see:</Text>
-              <Text style={styles.contextText}>{currentContext}</Text>
+            <View style={styles.header}>
+              <Text style={styles.emoji}>💭</Text>
+              <Text style={styles.title}>One quick question...</Text>
             </View>
-          )}
 
-          <View style={styles.questionBox}>
-            <Text style={styles.question}>{currentQuestion}</Text>
-          </View>
+            {currentContext && (
+              <View style={styles.contextBox}>
+                <Text style={styles.contextLabel}>What we see:</Text>
+                <Text style={styles.contextText}>{currentContext}</Text>
+              </View>
+            )}
 
-          <View style={styles.inputSection}>
-            <Text style={styles.inputLabel}>Your answer:</Text>
-            <TextInput
-              style={styles.textInput}
-              value={userInput}
-              onChangeText={setUserInput}
-              placeholder="Type your goals here..."
-              placeholderTextColor={Colors.textLight}
-              multiline
-              numberOfLines={4}
-              textAlignVertical="top"
-            />
-          </View>
+            <View style={styles.questionBox}>
+              <Text style={styles.question}>{currentQuestion}</Text>
+            </View>
 
-          <View style={styles.suggestionsSection}>
-            <Text style={styles.suggestionsLabel}>Quick options:</Text>
-            {quickSuggestions.map((suggestion, index) => (
-              <Button
-                key={index}
-                title={suggestion}
-                onPress={() => setUserInput(suggestion.split(' ').slice(1).join(' '))}
-                variant="outline"
-                style={styles.suggestionButton}
+            <View style={styles.inputSection}>
+              <Text style={styles.inputLabel}>Your answer:</Text>
+              <TextInput
+                style={[styles.textInput, { height: Math.max(MIN_INPUT_HEIGHT, Math.min(inputHeight, MAX_INPUT_HEIGHT)) }]}
+                value={userInput}
+                onChangeText={setUserInput}
+                onFocus={() => setIsFocused(true)}
+                onContentSizeChange={(e) =>
+                  setInputHeight(e.nativeEvent.contentSize.height + 24)
+                }
+                placeholder="Type your goals here..."
+                placeholderTextColor={Colors.textLight}
+                multiline
+                scrollEnabled={inputHeight > MAX_INPUT_HEIGHT}
+                textAlignVertical="top"
               />
-            ))}
-          </View>
-        </ScrollView>
+              {isFocused && (
+                <TouchableOpacity
+                  style={styles.hideKeyboardButton}
+                  onPress={() => {
+                    Keyboard.dismiss();
+                    setIsFocused(false);
+                  }}
+                >
+                  <Text style={styles.hideKeyboardText}>⌄ Hide Keyboard</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            <View style={styles.suggestionsSection}>
+              <Text style={styles.suggestionsLabel}>Quick options:</Text>
+              {quickSuggestions.map((suggestion, index) => (
+                <Button
+                  key={index}
+                  title={suggestion}
+                  onPress={() => {
+                    Keyboard.dismiss();
+                    setUserInput(suggestion.split(' ').slice(1).join(' '));
+                  }}
+                  variant="outline"
+                  style={styles.suggestionButton}
+                />
+              ))}
+            </View>
+          </ScrollView>
+        </TouchableWithoutFeedback>
 
         <View style={styles.footer}>
           {isProcessing ? (
@@ -262,9 +308,19 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontFamily: Fonts.bodyRegular,
     color: Colors.textPrimary,
-    minHeight: 120,
     borderWidth: 1,
     borderColor: Colors.border,
+  },
+  hideKeyboardButton: {
+    alignSelf: 'flex-end',
+    marginTop: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+  },
+  hideKeyboardText: {
+    fontSize: 13,
+    fontFamily: Fonts.bodySemiBold,
+    color: Colors.primary,
   },
   suggestionsSection: {
     gap: 10,

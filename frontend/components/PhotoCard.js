@@ -1,6 +1,10 @@
 /**
  * Photo Card Component for displaying photo guidance
  * Supports both camera capture and gallery selection
+ *
+ * CHANGED (delete photos): a photo can now be removed outright (onDelete),
+ * not just retaken. Retake and Delete are both shown as small pill buttons
+ * over the image.
  */
 
 import React from 'react';
@@ -13,6 +17,7 @@ export default function PhotoCard({
   guidance, 
   onTakePhoto,
   onChooseFromGallery,
+  onDelete,
   index 
 }) {
   return (
@@ -31,12 +36,22 @@ export default function PhotoCard({
       {photo ? (
         <View style={styles.imageContainer}>
           <Image source={{ uri: photo }} style={styles.image} />
-          <TouchableOpacity 
-            style={styles.retakeButton}
-            onPress={onTakePhoto}
-          >
-            <Text style={styles.retakeText}>↻ Retake</Text>
-          </TouchableOpacity>
+          <View style={styles.imageActions}>
+            <TouchableOpacity 
+              style={styles.retakeButton}
+              onPress={onTakePhoto}
+            >
+              <Text style={styles.retakeText}>↻ Retake</Text>
+            </TouchableOpacity>
+            {onDelete && (
+              <TouchableOpacity 
+                style={styles.deleteButton}
+                onPress={onDelete}
+              >
+                <Text style={styles.deleteText}>🗑 Delete</Text>
+              </TouchableOpacity>
+            )}
+          </View>
         </View>
       ) : (
         <View style={styles.buttonContainer}>
@@ -117,16 +132,31 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     backgroundColor: Colors.cardBackground,
   },
-  retakeButton: {
+  imageActions: {
     position: 'absolute',
     top: 8,
     right: 8,
+    flexDirection: 'row',
+    gap: 8,
+  },
+  retakeButton: {
     backgroundColor: 'rgba(0, 0, 0, 0.7)',
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 20,
   },
   retakeText: {
+    color: Colors.white,
+    fontSize: 12,
+    fontFamily: Fonts.bodySemiBold,
+  },
+  deleteButton: {
+    backgroundColor: 'rgba(192, 57, 43, 0.85)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+  },
+  deleteText: {
     color: Colors.white,
     fontSize: 12,
     fontFamily: Fonts.bodySemiBold,

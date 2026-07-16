@@ -1,5 +1,13 @@
 /**
  * Room Selection Screen - Choose rooms to organize
+ *
+ * CHANGED (always allow organizing more): this screen used to always
+ * overwrite appData.selectedRooms, which was fine the first time but would
+ * have erased already-finished rooms if the user came back mid-session via
+ * RecommendationsScreen's "Organize Another Room". It now APPENDS newly
+ * picked rooms onto whatever was already there, and points currentRoomIndex
+ * at the first newly-added room so already-completed rooms aren't redone.
+ * CHANGED (back navigation): added a Back button at the top of the screen.
  */
 
 import React, { useState } from 'react';
@@ -7,9 +15,11 @@ import { StyleSheet, Text, View, TouchableOpacity, SafeAreaView, ScrollView, Ale
 import Colors from '../constants/Colors';
 import Fonts from '../constants/Fonts';
 import Button from '../components/Button';
+import BackButton from '../components/BackButton';
 import { ROOM_TYPES } from '../constants/RoomConfig';
 
-export default function RoomSelectionScreen({ goToScreen, updateData }) {
+export default function RoomSelectionScreen({ goToScreen, goBack, canGoBack, updateData, appData }) {
+  const alreadyChosenRooms = appData.selectedRooms || [];
   const [selectedRooms, setSelectedRooms] = useState([]);
 
   const toggleRoom = (roomKey) => {
@@ -30,12 +40,21 @@ export default function RoomSelectionScreen({ goToScreen, updateData }) {
       return;
     }
 
-    console.log('✅ Selected rooms:', selectedRooms);
+    // Append onto any rooms already organized this session instead of
+    // replacing them, so returning here later doesn't lose earlier work.
+    const combinedRooms = [...alreadyChosenRooms, ...selectedRooms];
+    const nextRoomIndex = alreadyChosenRooms.length; // first newly-added room
+
+    console.log('✅ Selected rooms this round:', selectedRooms);
     updateData({ 
-      selectedRooms, 
-      currentRoomIndex: 0, 
-      currentRoom: selectedRooms[0],
-      roomPhotos: []
+      selectedRooms: combinedRooms, 
+      currentRoomIndex: nextRoomIndex, 
+      currentRoom: combinedRooms[nextRoomIndex],
+      roomPhotos: [],
+      detectedItems: [],
+      selectedItems: [],
+      currentItemIndex: 0,
+      currentItem: null
     });
     goToScreen('photoGuidance');
   };
@@ -43,6 +62,8 @@ export default function RoomSelectionScreen({ goToScreen, updateData }) {
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
+        <BackButton onPress={goBack} visible={canGoBack} />
+
         <View style={styles.header}>
           <Text style={styles.title}>Select Rooms</Text>
           <Text style={styles.subtitle}>
@@ -53,15 +74,18 @@ export default function RoomSelectionScreen({ goToScreen, updateData }) {
         <View style={styles.roomGrid}>
           {Object.entries(ROOM_TYPES).map(([key, room]) => {
             const isSelected = selectedRooms.includes(key);
+            const alreadyDone = alreadyChosenRooms.includes(key);
             return (
               <TouchableOpacity
                 key={key}
                 style={[
                   styles.roomCard,
-                  isSelected && styles.roomCardSelected
+                  isSelected && styles.roomCardSelected,
+                  alreadyDone && styles.roomCardDone
                 ]}
-                onPress={() => toggleRoom(key)}
-                activeOpacity={0.7}
+                onPress={() => !alreadyDone && toggleRoom(key)}
+                activeOpacity={alreadyDone ? 1 : 0.7}
+                disabled={alreadyDone}
               >
                 <Text style={styles.roomIcon}>{room.icon}</Text>
                 <View style={styles.roomInfo}>
@@ -72,10 +96,10 @@ export default function RoomSelectionScreen({ goToScreen, updateData }) {
                     {room.name}
                   </Text>
                   <Text style={styles.photoCount}>
-                    {room.photoGuidance.length} photos
+                    {alreadyDone ? 'Already organized this session' : `${room.photoGuidance.length} photos`}
                   </Text>
                 </View>
-                {isSelected && (
+                {(isSelected || alreadyDone) && (
                   <View style={styles.checkmark}>
                     <Text style={styles.checkmarkText}>✓</Text>
                   </View>
@@ -136,6 +160,9 @@ const styles = StyleSheet.create({
   roomCardSelected: {
     borderColor: Colors.primary,
     backgroundColor: Colors.white,
+  },
+  roomCardDone: {
+    opacity: 0.5,
   },
   roomIcon: {
     fontSize: 36,

@@ -3,21 +3,37 @@
  *
  * CHANGED (Task 8): shows the AccuracyBadge above the report so the user
  * sees, at a glance, how much measurement data fed into what they're about
- * to download. No other logic in this file changed.
+ * to download.
+ *
+ * CHANGED (products + cart/save/share):
+ *   - Fetches the whole-project matched product list from
+ *     /projects/:id/products and shows it as a shopping list.
+ *   - "Add All to Amazon Cart" opens each distinct affiliate storefront
+ *     link that appears among the recommended products (per-product
+ *     add-to-cart deep links need real ASINs — see products.py notes).
+ *   - "Save Project" PATCHes the project with a saved timestamp/name and
+ *     shows the user their project code so they can reference this session
+ *     later.
+ *   - "Share Plan" uses the native Share sheet to share the report text.
+ * CHANGED (back navigation): added a Back button at the top of the screen.
  */
 
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, Text, View, SafeAreaView, ScrollView, Alert, ActivityIndicator } from 'react-native';
+import { StyleSheet, Text, View, SafeAreaView, ScrollView, Alert, ActivityIndicator, Linking, Share, TextInput } from 'react-native';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system';
 import Markdown from 'react-native-markdown-display';
 import Colors from '../constants/Colors';
 import Fonts from '../constants/Fonts';
 import Button from '../components/Button';
+import BackButton from '../components/BackButton';
 import AccuracyBadge from '../components/AccuracyBadge';
+import ProductCard from '../components/ProductCard';
 
 export default function FinalReportScreen({ 
   goToScreen,
+  goBack,
+  canGoBack,
   appData,
   apiBaseUrl,
   sessionId
@@ -26,9 +42,13 @@ export default function FinalReportScreen({
   const [pdfFilename, setPdfFilename] = useState(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [allProducts, setAllProducts] = useState([]);
+  const [isSaving, setIsSaving] = useState(false);
+  const [projectName, setProjectName] = useState('');
 
   useEffect(() => {
     generateReport();
+    loadProducts();
   }, []);
 
   const generateReport = async () => {
@@ -75,6 +95,20 @@ export default function FinalReportScreen({
       );
     } finally {
       setIsGenerating(false);
+    }
+  };
+
+  const loadProducts = async () => {
+    if (!sessionId) return;
+    try {
+      const response = await fetch(`${apiBaseUrl}/projects/${sessionId}/products`);
+      const data = await response.json();
+      if (response.ok && data.success) {
+        setAllProducts(data.products || []);
+      }
+    } catch (error) {
+      console.error('❌ Failed to load products:', error);
+      // Non-fatal — the report itself already lists products in text form.
     }
   };
 
@@ -130,6 +164,90 @@ export default function FinalReportScreen({
     }
   };
 
+  /**
+   * Opens every distinct Amazon storefront link that appears among the
+   * recommended products. Real per-item "Add to Cart" links need actual
+   * ASINs (see products.py) — until then this is the closest equivalent:
+   * one tap per storefront instead of hunting down each product manually.
+   */
+  const addAllToCart = async () => {
+    if (allProducts.length === 0) {
+      Alert.alert('No Products Yet', 'No products have been recommended yet in this session.');
+      return;
+    }
+
+    const uniqueLinks = [...new Set(allProducts.map(p => p.amazon_link))];
+
+    Alert.alert(
+      'Add All to Amazon Cart',
+      `This opens ${uniqueLinks.length} Amazon storefront link${uniqueLinks.length > 1 ? 's' : ''} covering all ${allProducts.length} recommended product${allProducts.length > 1 ? 's' : ''}. Add each to your cart from there.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Open Amazon',
+          onPress: async () => {
+            for (const link of uniqueLinks) {
+              try {
+                await Linking.openURL(link);
+              } catch (error) {
+                console.error('❌ Failed to open link:', link, error);
+              }
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const saveProject = async () => {
+    if (!sessionId) {
+      Alert.alert('Error', 'Session not initialized.');
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const response = await fetch(`${apiBaseUrl}/projects/${sessionId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project_name: projectName.trim() || 'My Home Organization Plan',
+          saved_at: new Date().toISOString(),
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Failed to save project');
+      }
+
+      Alert.alert(
+        'Project Saved',
+        `Your plan is saved. Project code:\n\n${sessionId}\n\nKeep this code to reference or resume this project later.`,
+        [{ text: 'OK' }]
+      );
+    } catch (error) {
+      console.error('❌ Save project error:', error);
+      Alert.alert('Save Error', `Failed to save project: ${error.message}`);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const sharePlan = async () => {
+    if (!report) {
+      Alert.alert('Not Ready', 'Your report is still being generated.');
+      return;
+    }
+    try {
+      await Share.share({
+        title: 'My Home Organization Plan',
+        message: report,
+      });
+    } catch (error) {
+      console.error('❌ Share error:', error);
+    }
+  };
+
   const startOver = () => {
     Alert.alert(
       'Start Over?',
@@ -139,7 +257,7 @@ export default function FinalReportScreen({
         { 
           text: 'Start Over', 
           style: 'destructive',
-          onPress: () => goToScreen('welcome')
+          onPress: () => goToScreen('welcome', { resetHistory: true })
         }
       ]
     );
@@ -181,6 +299,8 @@ export default function FinalReportScreen({
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
+        <BackButton onPress={goBack} visible={canGoBack} />
+
         <View style={styles.header}>
           <Text style={styles.emoji}>🎉</Text>
           <Text style={styles.title}>Your Home Organization Plan</Text>
@@ -195,6 +315,45 @@ export default function FinalReportScreen({
           <Markdown style={markdownStyles}>
             {report}
           </Markdown>
+        </View>
+
+        {allProducts.length > 0 && (
+          <View style={styles.productsSection}>
+            <Text style={styles.sectionTitle}>Your Full Shopping List</Text>
+            {allProducts.map((product) => (
+              <ProductCard key={product.id} product={product} />
+            ))}
+            <Button
+              title="🛒 Add All to Amazon Cart"
+              onPress={addAllToCart}
+              style={styles.cartButton}
+            />
+          </View>
+        )}
+
+        <View style={styles.saveShareBox}>
+          <Text style={styles.sectionTitle}>Save & Share</Text>
+          <Text style={styles.inputLabel}>Project name (optional)</Text>
+          <TextInput
+            style={styles.nameInput}
+            value={projectName}
+            onChangeText={setProjectName}
+            placeholder="e.g. Kitchen + Closet Refresh"
+            placeholderTextColor={Colors.textLight}
+          />
+          <Button
+            title={isSaving ? 'Saving...' : '💾 Save Project'}
+            onPress={saveProject}
+            loading={isSaving}
+            variant="secondary"
+            style={styles.saveShareButton}
+          />
+          <Button
+            title="📤 Share Plan"
+            onPress={sharePlan}
+            variant="outline"
+            style={styles.saveShareButton}
+          />
         </View>
 
         <View style={styles.successBox}>
@@ -214,6 +373,12 @@ export default function FinalReportScreen({
           loading={isDownloading}
           disabled={isDownloading}
         />
+        <Button
+          title="⬅ Organize Something Else"
+          onPress={() => goToScreen('recommendations')}
+          variant="outline"
+          style={styles.startOverButton}
+        />
         <Button 
           title="Start Over"
           onPress={startOver}
@@ -232,7 +397,7 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     padding: 30,
-    paddingBottom: 180,
+    paddingBottom: 220,
   },
   header: {
     alignItems: 'center',
@@ -260,6 +425,44 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 20,
     marginBottom: 20,
+  },
+  productsSection: {
+    marginBottom: 24,
+  },
+  sectionTitle: {
+    fontSize: 20,
+    fontFamily: Fonts.headingBold,
+    color: Colors.accent,
+    marginBottom: 14,
+  },
+  cartButton: {
+    marginTop: 6,
+  },
+  saveShareBox: {
+    backgroundColor: Colors.cardBackground,
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 20,
+  },
+  inputLabel: {
+    fontSize: 13,
+    fontFamily: Fonts.bodySemiBold,
+    color: Colors.textPrimary,
+    marginBottom: 8,
+  },
+  nameInput: {
+    backgroundColor: Colors.white,
+    borderRadius: 10,
+    padding: 12,
+    fontSize: 15,
+    fontFamily: Fonts.bodyRegular,
+    color: Colors.textPrimary,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginBottom: 12,
+  },
+  saveShareButton: {
+    marginTop: 8,
   },
   successBox: {
     backgroundColor: Colors.primary,

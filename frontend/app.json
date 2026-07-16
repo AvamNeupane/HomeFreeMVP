@@ -16,9 +16,9 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.homeorganizer.app",
+      "bundleIdentifier": "com.avamneupane.homeorganizer",
       "infoPlist": {
-        "NSCameraUsageDescription": "This app needs camera access to take photos of your rooms for organization analysis.",
+        "NSCameraUsageDescription": "We use your camera to measure shelves and drawers with AR.",
         "NSPhotoLibraryUsageDescription": "This app needs photo library access to select and save room photos.",
         "NSPhotoLibraryAddUsageDescription": "This app needs permission to save your organization reports."
       }

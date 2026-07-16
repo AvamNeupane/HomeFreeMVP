@@ -17,6 +17,7 @@ from werkzeug.exceptions import RequestEntityTooLarge
 import google.generativeai as genai
 from PIL import Image
 from session_store import SQLiteSessionStore
+from products import find_matching_products, category_for_room
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
@@ -463,9 +464,28 @@ def generate_area_recommendations(
 
         measurement_block = _format_measurement_block(measurement)
         priorities_block = _format_priorities_block(priorities, visual_style)
+
+        # Voice guide: Natasha speaks like a warm, direct organizer talking
+        # to a client in their space — never like a bulleted spec sheet.
+        # These examples are given to the model verbatim so its phrasing
+        # actually matches, not just its content.
+        voice_block = """
+        Write every recommendation in Natasha's voice — warm, direct, and personal,
+        like a professional organizer talking through the space with a client.
+        Never write terse commands. Some examples of the tone to match:
+
+        Instead of: "Purchase three storage containers."
+        Use: "I'd suggest adding three clear storage bins here so every category has a dedicated home."
+
+        Instead of: "Optimize vertical storage."
+        Use: "You're leaving valuable storage space unused above your current items. Adding stackable bins would immediately increase capacity."
+
+        Instead of: "Use labels."
+        Use: "Once everything has a designated home, simple labels make maintaining the system much easier."
+        """
         
         prompt = f"""
-        You are an expert home organizer analyzing a {area_name} in a {room_type.replace('_', ' ')}.
+        You are Natasha, an expert home organizer analyzing a {area_name} in a {room_type.replace('_', ' ')}.
         
         Photo types: {', '.join(photo_labels) if photo_labels else 'General photos'}
         User's intention: "{user_intention}"
@@ -473,6 +493,8 @@ def generate_area_recommendations(
         {measurement_block}
 
         {priorities_block}
+
+        {voice_block}
         
         Provide SPECIFIC, ACTIONABLE recommendations (3-5 steps) to help them achieve their goal.
         If measured dimensions were given above, your recommendations MUST reference
@@ -480,13 +502,16 @@ def generate_area_recommendations(
         than giving generic advice. If no measurements were given, say so is fine and
         keep the advice general.
         
-        Format as a numbered list:
-        1. [Specific action with measurements/details]
+        Format as a numbered list, each step written in Natasha's voice as shown above:
+        1. [Specific action with measurements/details, written warmly and personally]
         2. [Next action]
         ...
         
-        Be direct, specific, and practical. Include product suggestions when relevant.
-        Keep it concise (200-300 words max).
+        End with one short sentence starting "This system..." or "This approach..."
+        explaining WHY it works for the user (reduces clutter, easier for family
+        members to maintain, etc).
+        
+        Be direct, specific, and practical. Keep it concise (200-300 words max).
         """
         
         logger.info(f"💡 Generating recommendations for {area_name}...")
@@ -550,6 +575,31 @@ def format_measurements_summary(session_data: Dict) -> str:
                 f"({unit_label}, W × D × H clearance) — **{count}** shelf(s)\n"
             )
         lines.append("\n")
+
+    return ''.join(lines)
+
+
+def format_products_summary(session_data: Dict) -> str:
+    """Build a markdown shopping list from every area's matched products."""
+    lines = ["## Recommended Products\n"]
+    found_any = False
+
+    for room in session_data.get('rooms', []):
+        for area in room.get('areas', []):
+            products = area.get('products') or []
+            if not products:
+                continue
+            found_any = True
+            lines.append(f"### {area.get('name', 'Area')}\n")
+            for p in products:
+                lines.append(
+                    f"- **{p['name']}** — ${p['price']:.2f} — {p['reason']} "
+                    f"([View on Amazon]({p['amazon_link']}))\n"
+                )
+            lines.append("\n")
+
+    if not found_any:
+        lines.append("No products were matched during this session.\n")
 
     return ''.join(lines)
 
@@ -661,6 +711,12 @@ def generate_final_report(session_data: Dict) -> Tuple[Optional[str], Optional[s
         measurements_block = format_measurements_summary(session_data)
         if measurements_block.strip():
             report = f"{report}\n\n---\n\n{measurements_block}"
+
+        # Always append the matched-product shopping list so recommended
+        # products (with affiliate links) show up in the downloadable report.
+        products_block = format_products_summary(session_data)
+        if products_block.strip():
+            report = f"{report}\n\n---\n\n{products_block}"
         
         logger.info(f"✅ Final report generated ({len(report)} chars)")
         
@@ -1253,18 +1309,26 @@ def get_recommendations():
                 'error': error
             }), 500
         
+        # Find products that actually fit the measured space (falls back to
+        # general category picks if no measurement was taken). Category is
+        # inferred from the room type (kitchen vs. closet/bedroom/etc).
+        category = category_for_room(current_room['type'])
+        products = find_matching_products(area_measurement, category, limit=4)
+
         # Store in session
         current_area['user_intention'] = user_intention
         current_area['recommendations'] = recommendations
+        current_area['products'] = products
         # Persisting the store object mutated a nested dict in place above;
         # SQLiteSessionStore requires an explicit __setitem__ to write it back.
         sessions[session_id] = session
         
-        logger.info(f"✅ Generated recommendations for {current_area['name']}")
+        logger.info(f"✅ Generated recommendations for {current_area['name']} with {len(products)} matched product(s)")
         
         return jsonify({
             'success': True,
-            'recommendations': recommendations
+            'recommendations': recommendations,
+            'products': products
         }), 200
         
     except Exception as e:
@@ -1272,6 +1336,47 @@ def get_recommendations():
         return jsonify({
             'success': False,
             'error': f"Recommendations failed: {str(e)}"
+        }), 500
+
+
+@app.route('/projects/<project_id>/products', methods=['GET'])
+def get_project_products(project_id):
+    """
+    Aggregate every matched product across all areas/rooms in this project,
+    deduped by product id. Powers "Add All to Amazon Cart" and any
+    whole-project product view on the frontend.
+    """
+    try:
+        if project_id not in sessions:
+            return jsonify({
+                'success': False,
+                'error': f'Project not found: {project_id}'
+            }), 404
+
+        session = sessions[project_id]
+        seen = {}
+        for room in session.get('rooms', []):
+            for area in room.get('areas', []):
+                for p in area.get('products') or []:
+                    seen[p['id']] = p
+
+        products = list(seen.values())
+        # Group affiliate links by category so the client can open one link
+        # per storefront rather than one per product (see products.py notes
+        # on why per-product Add-to-Cart links aren't available yet).
+        links = sorted({p['amazon_link'] for p in products})
+
+        return jsonify({
+            'success': True,
+            'products': products,
+            'amazon_links': links
+        }), 200
+
+    except Exception as e:
+        logger.error(f"❌ Get project products failed: {str(e)}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': f"Get project products failed: {str(e)}"
         }), 500
 
 

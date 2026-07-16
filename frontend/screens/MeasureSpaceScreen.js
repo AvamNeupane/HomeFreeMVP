@@ -4,6 +4,23 @@
  * CHANGED (Task 8): shows the AccuracyBadge (Basic/Good/Excellent) so the
  * user can see how measuring this area affects their overall recommendation
  * quality. No other logic in this file changed.
+ *
+ * CHANGED (ARKit integration — see arkit_prompt_for_llm.md): the intro
+ * phase now offers a "Scan with AR" option on top of the existing manual
+ * text-input flow, instead of replacing it outright:
+ *   - isARMeasurementAvailable() gates the button so it only ever appears
+ *     on a real iOS device with the native module linked (Simulator,
+ *     Android, and Expo Go all fall straight through to manual entry).
+ *   - A successful scan returns { width, depth, height } in METERS from
+ *     ARKit; those are converted to whichever unit the user has selected
+ *     and dropped straight into `currentProfile`, then the wizard jumps to
+ *     the shelf-count step — the user still confirms/edits those numbers
+ *     and enters a count exactly as before, AR just fills in the tedious
+ *     part.
+ *   - If the user cancels the AR screen, we stay on the intro step. If
+ *     they tap "Manual Entry" inside the AR screen, we drop into the
+ *     existing field-by-field flow at fieldIndex 0. Any other native
+ *     error surfaces an alert but never blocks the manual path.
  */
 
 import React, { useState } from 'react';
@@ -17,12 +34,14 @@ import {
   Alert,
   TouchableOpacity,
   ActivityIndicator,
+  Platform,
 } from 'react-native';
 import Colors from '../constants/Colors';
 import Fonts from '../constants/Fonts';
 import Button from '../components/Button';
 import ProgressBar from '../components/ProgressBar';
 import AccuracyBadge from '../components/AccuracyBadge';
+import ARMeasurementModule, { isARMeasurementAvailable } from '../native/ARMeasurementModule';
 import {
   MEASUREMENT_FIELDS,
   MEASUREMENT_UNITS,
@@ -31,6 +50,12 @@ import {
 } from '../constants/MeasurementConfig';
 
 const EMPTY_PROFILE = { width: '', depth: '', height: '', count: '1' };
+
+// 1 meter = 100 cm = 39.3701 inches.
+const METERS_TO_UNIT = {
+  in: (m) => m / 0.0254,
+  cm: (m) => m * 100,
+};
 
 export default function MeasureSpaceScreen({
   goToScreen,
@@ -48,6 +73,7 @@ export default function MeasureSpaceScreen({
   const [currentProfile, setCurrentProfile] = useState({ ...EMPTY_PROFILE });
   const [shelfProfiles, setShelfProfiles] = useState([]);
   const [isSaving, setIsSaving] = useState(false);
+  const [isScanning, setIsScanning] = useState(false);
 
   const totalSteps = MEASUREMENT_FIELDS.length + 1;
   const currentStep =
@@ -107,6 +133,48 @@ export default function MeasureSpaceScreen({
     setCurrentProfile({ ...EMPTY_PROFILE });
     setFieldIndex(0);
     setPhase('measure');
+  };
+
+  /**
+   * Launch the native ARKit scanner (see native/ARMeasurementModule.ts).
+   * On success, converts the returned meters into the user's selected
+   * unit and jumps straight to the shelf-count step with those values
+   * pre-filled — the user can still edit them before continuing.
+   */
+  const handleARScan = async () => {
+    setIsScanning(true);
+    try {
+      const meters = await ARMeasurementModule.launchARScanner(['width', 'depth', 'height']);
+      const toUnit = METERS_TO_UNIT[unit];
+
+      const scannedProfile = { ...EMPTY_PROFILE };
+      for (const key of ['width', 'depth', 'height']) {
+        if (typeof meters[key] === 'number') {
+          scannedProfile[key] = toUnit(meters[key]).toFixed(1);
+        }
+      }
+
+      setCurrentProfile(scannedProfile);
+      setPhase('count');
+    } catch (error) {
+      if (error.code === 'MANUAL_ENTRY_REQUESTED') {
+        // User tapped "Manual Entry" inside the AR screen — not an error,
+        // just drop into the existing field-by-field flow.
+        setCurrentProfile({ ...EMPTY_PROFILE });
+        setFieldIndex(0);
+        setPhase('measure');
+      } else if (error.code === 'USER_CANCELLED') {
+        // User backed out of the AR screen entirely — stay on intro.
+      } else {
+        Alert.alert(
+          'AR Scan Unavailable',
+          error.message || 'Could not start the AR scanner. You can still measure manually below.',
+          [{ text: 'OK' }]
+        );
+      }
+    } finally {
+      setIsScanning(false);
+    }
   };
 
   const saveAndContinue = async (profiles, skipped = false) => {
@@ -192,6 +260,7 @@ export default function MeasureSpaceScreen({
   };
 
   const unitSymbol = MEASUREMENT_UNITS[unit].symbol;
+  const arAvailable = isARMeasurementAvailable();
 
   const renderUnitToggle = () => (
     <View style={styles.unitToggle}>
@@ -219,6 +288,15 @@ export default function MeasureSpaceScreen({
           <Text style={styles.areaBadgeText}>{areaName}</Text>
         </View>
       </View>
+
+      {arAvailable && (
+        <View style={styles.arBox}>
+          <Text style={styles.arBoxTitle}>📐 Point your camera at the space</Text>
+          <Text style={styles.arBoxSubtitle}>
+            Tap twice per dimension to measure with your camera — no tape measure needed.
+          </Text>
+        </View>
+      )}
 
       <View style={styles.infoBox}>
         <Text style={styles.infoTitle}>You'll measure:</Text>
@@ -277,6 +355,19 @@ export default function MeasureSpaceScreen({
 
       <Text style={styles.fieldLabel}>Shelf Count</Text>
       <Text style={styles.instruction}>{getShelfCountPrompt(areaName)}</Text>
+
+      {MEASUREMENT_FIELDS.map((field) => (
+        <View key={field.key} style={styles.inputRow}>
+          <Text style={styles.confirmLabel}>{field.label}</Text>
+          <TextInput
+            style={styles.measureInput}
+            value={currentProfile[field.key]}
+            onChangeText={(v) => updateProfile(field.key, v)}
+            keyboardType="decimal-pad"
+          />
+          <Text style={styles.unitLabel}>{unitSymbol}</Text>
+        </View>
+      ))}
 
       <View style={styles.countRow}>
         <TouchableOpacity
@@ -337,11 +428,23 @@ export default function MeasureSpaceScreen({
             <ActivityIndicator color={Colors.primary} />
             <Text style={styles.savingText}>Saving measurements...</Text>
           </View>
+        ) : isScanning ? (
+          <View style={styles.savingRow}>
+            <ActivityIndicator color={Colors.primary} />
+            <Text style={styles.savingText}>Opening AR scanner...</Text>
+          </View>
         ) : (
           <>
             {phase === 'intro' && (
               <>
-                <Button title="Start Measuring" onPress={() => setPhase('measure')} />
+                {arAvailable && (
+                  <Button title="📐 Scan with AR (Camera)" onPress={handleARScan} />
+                )}
+                <Button
+                  title={arAvailable ? 'Enter Measurements Manually' : 'Start Measuring'}
+                  onPress={() => setPhase('measure')}
+                  variant={arAvailable ? 'outline' : undefined}
+                />
                 <Button title="Skip for Now" onPress={handleSkip} variant="outline" />
               </>
             )}
@@ -388,7 +491,7 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     padding: 30,
-    paddingBottom: 200,
+    paddingBottom: 240,
   },
   header: {
     alignItems: 'center',
@@ -423,6 +526,26 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontFamily: Fonts.bodySemiBold,
     color: Colors.accent,
+  },
+  arBox: {
+    backgroundColor: Colors.cardBackground,
+    borderRadius: 16,
+    padding: 18,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+  },
+  arBoxTitle: {
+    fontSize: 15,
+    fontFamily: Fonts.bodySemiBold,
+    color: Colors.accent,
+    marginBottom: 6,
+  },
+  arBoxSubtitle: {
+    fontSize: 13,
+    fontFamily: Fonts.bodyRegular,
+    color: Colors.textSecondary,
+    lineHeight: 19,
   },
   infoBox: {
     backgroundColor: Colors.cardBackground,
@@ -492,6 +615,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
+    marginBottom: 14,
+  },
+  confirmLabel: {
+    width: 64,
+    fontSize: 14,
+    fontFamily: Fonts.bodySemiBold,
+    color: Colors.textSecondary,
   },
   measureInput: {
     flex: 1,

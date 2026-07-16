@@ -7,6 +7,11 @@
  * CHANGED (Task 5): registered the new PrioritiesScreen.
  * CHANGED (Task 4/5/7): new appData fields — consentGiven, selectedItems,
  * organizationPriorities, visualStyle.
+ * CHANGED (Back navigation): goToScreen now pushes onto a history stack, and
+ * a new goBack()/canGoBack pair is included in sharedProps so every screen
+ * can offer a working "Back" button without each screen managing its own
+ * history. Screens that need to skip history (e.g. after a destructive
+ * "Start Over") can call goToScreen(screen, { resetHistory: true }).
  */
 
 import React, { useState, useEffect } from 'react';
@@ -70,6 +75,10 @@ export default function App() {
   // App state
   // CHANGED (Task 7): start on the consent screen, not welcome.
   const [currentScreen, setCurrentScreen] = useState('consent');
+  // Back-navigation history: every screen we've visited, in order, so
+  // goBack() can pop off the most recent one. The very first screen never
+  // gets a working Back button since there's nothing behind it.
+  const [screenHistory, setScreenHistory] = useState([]);
   const [sessionId, setSessionId] = useState(null);
   const [connectionStatus, setConnectionStatus] = useState('checking'); // checking, connected, error
   const [appData, setAppData] = useState({
@@ -249,10 +258,38 @@ export default function App() {
     setAppData(prev => ({ ...prev, ...newData }));
   };
 
-  const goToScreen = (screen) => {
+  /**
+   * Navigate forward to a screen, remembering where we came from.
+   * @param {string} screen - screen key to navigate to
+   * @param {{resetHistory?: boolean}} [opts] - pass resetHistory: true to
+   *        clear the back-stack (e.g. "Start Over").
+   */
+  const goToScreen = (screen, opts = {}) => {
     console.log('🔄 Navigating to:', screen);
+    if (opts.resetHistory) {
+      setScreenHistory([]);
+    } else {
+      setScreenHistory(prev => [...prev, currentScreen]);
+    }
     setCurrentScreen(screen);
   };
+
+  /**
+   * Go back to whatever screen preceded the current one. No-op if there's
+   * no history (e.g. already on the very first screen).
+   */
+  const goBack = () => {
+    setScreenHistory(prev => {
+      if (prev.length === 0) return prev;
+      const next = [...prev];
+      const previousScreen = next.pop();
+      console.log('↩️  Going back to:', previousScreen);
+      setCurrentScreen(previousScreen);
+      return next;
+    });
+  };
+
+  const canGoBack = screenHistory.length > 0;
 
   // Render current screen
   const renderScreen = () => {
@@ -262,6 +299,8 @@ export default function App() {
       appData,
       updateData,
       goToScreen,
+      goBack,
+      canGoBack,
       connectionStatus
     };
 

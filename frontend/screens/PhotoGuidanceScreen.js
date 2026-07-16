@@ -7,6 +7,8 @@
  * Continue was enabled. It now only requires ONE photo. The remaining
  * guidance cards are still shown as optional add-ons — more photos still
  * improve detection quality, they just no longer block the user.
+ * CHANGED (delete photos): each captured photo can now be deleted outright.
+ * CHANGED (back navigation): added a Back button at the top of the screen.
  */
 
 import React, { useState } from 'react';
@@ -15,6 +17,7 @@ import * as ImagePicker from 'expo-image-picker';
 import Colors from '../constants/Colors';
 import Fonts from '../constants/Fonts';
 import Button from '../components/Button';
+import BackButton from '../components/BackButton';
 import PhotoCard from '../components/PhotoCard';
 import ProgressBar from '../components/ProgressBar';
 import { ROOM_TYPES } from '../constants/RoomConfig';
@@ -23,6 +26,8 @@ const MINIMUM_PHOTOS_REQUIRED = 1;
 
 export default function PhotoGuidanceScreen({ 
   goToScreen, 
+  goBack,
+  canGoBack,
   updateData, 
   appData,
   apiBaseUrl,
@@ -138,8 +143,20 @@ export default function PhotoGuidanceScreen({
     }
   };
 
+  /**
+   * Remove a captured photo entirely (not a retake — just delete it).
+   * @param {Object} guidance - Photo guidance object
+   */
+  const deletePhoto = (guidance) => {
+    setPhotos(prev => {
+      const next = { ...prev };
+      delete next[guidance.label];
+      return next;
+    });
+  };
+
   const photoCount = Object.keys(photos).length;
-  // CHANGED: used to be roomConfig.photoGuidance.every(...) — now just needs one.
+  // used to be roomConfig.photoGuidance.every(...) — now just needs one.
   const hasMinimumPhoto = photoCount >= MINIMUM_PHOTOS_REQUIRED;
 
   /**
@@ -238,6 +255,8 @@ export default function PhotoGuidanceScreen({
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
+        <BackButton onPress={goBack} visible={canGoBack} />
+
         <View style={styles.header}>
           <Text style={styles.roomIcon}>{roomConfig.icon}</Text>
           <Text style={styles.title}>{roomConfig.name}</Text>
@@ -261,6 +280,7 @@ export default function PhotoGuidanceScreen({
               guidance={guidance}
               onTakePhoto={() => takePhoto(guidance)}
               onChooseFromGallery={() => chooseFromGallery(guidance)}
+              onDelete={() => deletePhoto(guidance)}
               index={index}
             />
           ))}

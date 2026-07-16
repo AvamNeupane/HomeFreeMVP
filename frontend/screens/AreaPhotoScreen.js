@@ -1,6 +1,14 @@
 /**
  * Area Photo Screen - Take detailed photos of specific area
  * Supports both camera capture and gallery selection
+ *
+ * CHANGED (photo count fix): this screen used to require EVERY guidance
+ * photo (areaGuidance.every(...)) before Continue was enabled — e.g. all 6
+ * for a desk. It now only requires ONE, matching PhotoGuidanceScreen's
+ * "one photo is always enough" rule. The rest stay as optional add-ons.
+ * CHANGED (delete photos): each captured photo can now be deleted outright,
+ * not just retaken.
+ * CHANGED (back navigation): added a Back button at the top of the screen.
  */
 
 import React, { useState } from 'react';
@@ -9,12 +17,17 @@ import * as ImagePicker from 'expo-image-picker';
 import Colors from '../constants/Colors';
 import Fonts from '../constants/Fonts';
 import Button from '../components/Button';
+import BackButton from '../components/BackButton';
 import PhotoCard from '../components/PhotoCard';
 import ProgressBar from '../components/ProgressBar';
 import { getAreaGuidance } from '../constants/RoomConfig';
 
+const MINIMUM_PHOTOS_REQUIRED = 1;
+
 export default function AreaPhotoScreen({ 
   goToScreen, 
+  goBack,
+  canGoBack,
   updateData, 
   appData,
   apiBaseUrl,
@@ -131,17 +144,31 @@ export default function AreaPhotoScreen({
     }
   };
 
-  const allPhotosTaken = areaGuidance.every(g => photos[g.label]);
+  /**
+   * Remove a captured photo entirely (not a retake — just delete it).
+   * @param {Object} guidance - Photo guidance object
+   */
+  const deletePhoto = (guidance) => {
+    setPhotos(prev => {
+      const next = { ...prev };
+      delete next[guidance.label];
+      return next;
+    });
+  };
+
   const photoCount = Object.keys(photos).length;
+  // CHANGED: used to be areaGuidance.every(...) — now the user decides how
+  // many of the optional close-ups to take, same as room-level photos.
+  const hasMinimumPhoto = photoCount >= MINIMUM_PHOTOS_REQUIRED;
 
   /**
    * Process area photos and generate contextual question
    */
   const handleContinue = async () => {
-    if (!allPhotosTaken) {
+    if (!hasMinimumPhoto) {
       Alert.alert(
-        'Photos Incomplete',
-        `Please capture or select all ${areaGuidance.length} photos before continuing.`,
+        'Photo Required',
+        'Please take or select at least one photo to continue.',
         [{ text: 'OK' }]
       );
       return;
@@ -165,23 +192,22 @@ export default function AreaPhotoScreen({
       formData.append('session_id', sessionId);
       formData.append('area_name', currentItem.name);
       formData.append('room_type', currentRoomType);
-      
-      // Add photo labels
-      const labels = areaGuidance.map(g => g.label);
+
+      // Only send whichever photos were actually taken (no longer required
+      // to be all of them).
+      const takenGuidance = areaGuidance.filter(g => photos[g.label]);
+      const labels = takenGuidance.map(g => g.label);
       formData.append('photo_labels', JSON.stringify(labels));
 
-      // Add all photos
       let imageIndex = 0;
-      for (const guidance of areaGuidance) {
+      for (const guidance of takenGuidance) {
         const uri = photos[guidance.label];
-        if (uri) {
-          formData.append(`image${imageIndex}`, {
-            uri: uri,
-            type: 'image/jpeg',
-            name: `${guidance.label}.jpg`
-          });
-          imageIndex++;
-        }
+        formData.append(`image${imageIndex}`, {
+          uri: uri,
+          type: 'image/jpeg',
+          name: `${guidance.label}.jpg`
+        });
+        imageIndex++;
       }
 
       console.log(`📤 Uploading ${imageIndex} area images for ${currentItem.name}...`);
@@ -229,10 +255,12 @@ export default function AreaPhotoScreen({
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
+        <BackButton onPress={goBack} visible={canGoBack} />
+
         <View style={styles.header}>
           <Text style={styles.title}>{currentItem.name}</Text>
           <Text style={styles.subtitle}>
-            Take or select {areaGuidance.length} detailed photos
+            Take or select at least 1 photo ({areaGuidance.length} suggested, optional)
           </Text>
           <View style={styles.contextBox}>
             <Text style={styles.contextText}>{currentItem.reason}</Text>
@@ -242,7 +270,7 @@ export default function AreaPhotoScreen({
         <ProgressBar 
           current={photoCount}
           total={areaGuidance.length}
-          label="Photos captured"
+          label="Photos captured (1 needed)"
         />
 
         <View style={styles.photoGrid}>
@@ -253,6 +281,7 @@ export default function AreaPhotoScreen({
               guidance={guidance}
               onTakePhoto={() => takePhoto(guidance)}
               onChooseFromGallery={() => chooseFromGallery(guidance)}
+              onDelete={() => deletePhoto(guidance)}
               index={index}
             />
           ))}
@@ -274,7 +303,7 @@ export default function AreaPhotoScreen({
           <Button 
             title="Continue"
             onPress={handleContinue}
-            disabled={!allPhotosTaken}
+            disabled={!hasMinimumPhoto}
           />
         )}
       </View>

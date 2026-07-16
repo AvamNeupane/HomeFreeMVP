@@ -11,6 +11,18 @@
  * CHANGED (Task 8): shows the AccuracyBadge so the user sees how their
  * choices so far affect recommendation quality before deciding what's next.
  *
+ * CHANGED (always allow organizing more): previously, once you ran out of
+ * selected items AND rooms, the only options were "Generate Final Report"
+ * or "Skip to Final Report" — there was no way back into the flow to
+ * organize something else. Now "Organize Another Area" and "Organize
+ * Another Room" are always available, not just while hasMoreItems /
+ * hasMoreRooms is true.
+ *
+ * CHANGED (products): shows the matched product recommendations returned
+ * alongside the AI text, each with image/price/reason/Amazon link.
+ *
+ * CHANGED (back navigation): added a Back button at the top of the screen.
+ *
  * Falls back to detectedItems if selectedItems isn't present, so this still
  * works even if ItemSelectionScreen wasn't rebuilt yet.
  */
@@ -21,10 +33,14 @@ import Markdown from 'react-native-markdown-display';
 import Colors from '../constants/Colors';
 import Fonts from '../constants/Fonts';
 import Button from '../components/Button';
+import BackButton from '../components/BackButton';
 import AccuracyBadge from '../components/AccuracyBadge';
+import ProductCard from '../components/ProductCard';
 
 export default function RecommendationsScreen({ 
   goToScreen, 
+  goBack,
+  canGoBack,
   updateData, 
   appData 
 }) {
@@ -36,6 +52,7 @@ export default function RecommendationsScreen({
 
   const hasMoreItems = currentItemIndex < sessionItems.length - 1;
   const hasMoreRooms = currentRoomIndex < selectedRooms.length - 1;
+  const products = currentRec.products || [];
 
   const handleNextArea = () => {
     const nextIndex = currentItemIndex + 1;
@@ -71,6 +88,21 @@ export default function RecommendationsScreen({
     goToScreen('photoGuidance');
   };
 
+  // NEW: always available, not gated on hasMoreItems. Sends the user back
+  // to pick from the areas already detected in this room (or add a custom
+  // one) — a fresh round that appends onto allRecommendations rather than
+  // replacing anything already done.
+  const handleOrganizeAnotherArea = () => {
+    goToScreen('itemSelection');
+  };
+
+  // NEW: always available, not gated on hasMoreRooms. Sends the user back
+  // to room selection to add an additional room on top of the ones already
+  // organized (RoomSelectionScreen appends rather than overwrites).
+  const handleOrganizeAnotherRoom = () => {
+    goToScreen('roomSelection');
+  };
+
   const handleFinish = () => {
     Alert.alert(
       'Generate Report?',
@@ -88,6 +120,8 @@ export default function RecommendationsScreen({
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
+        <BackButton onPress={goBack} visible={canGoBack} />
+
         <View style={styles.header}>
           <Text style={styles.emoji}>✨</Text>
           <Text style={styles.title}>Understood!</Text>
@@ -110,30 +144,20 @@ export default function RecommendationsScreen({
           </Markdown>
         </View>
 
+        {products.length > 0 && (
+          <View style={styles.productsSection}>
+            <Text style={styles.sectionTitle}>Recommended Products</Text>
+            {products.map((product) => (
+              <ProductCard key={product.id} product={product} />
+            ))}
+          </View>
+        )}
+
         <View style={styles.nextStepsBox}>
           <Text style={styles.nextStepsTitle}>What's next?</Text>
-          
-          {hasMoreItems && (
-            <View style={styles.option}>
-              <Text style={styles.optionText}>
-                📦 More areas you selected in this room
-              </Text>
-            </View>
-          )}
-          
-          {hasMoreRooms && (
-            <View style={styles.option}>
-              <Text style={styles.optionText}>
-                🏠 More rooms to organize
-              </Text>
-            </View>
-          )}
-          
-          <View style={styles.option}>
-            <Text style={styles.optionText}>
-              📋 Ready to see your complete report
-            </Text>
-          </View>
+          <Text style={styles.nextStepsSubtitle}>
+            You can always come back and organize more — nothing here is final.
+          </Text>
         </View>
       </ScrollView>
 
@@ -154,6 +178,20 @@ export default function RecommendationsScreen({
             onPress={handleFinish}
           />
         )}
+
+        <Button
+          title="📦 Organize Another Area"
+          onPress={handleOrganizeAnotherArea}
+          variant="secondary"
+          style={styles.secondaryButton}
+        />
+
+        <Button
+          title="🏠 Organize Another Room"
+          onPress={handleOrganizeAnotherRoom}
+          variant="secondary"
+          style={styles.secondaryButton}
+        />
         
         <Button 
           title="Skip to Final Report"
@@ -173,7 +211,7 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     padding: 30,
-    paddingBottom: 180,
+    paddingBottom: 320,
   },
   header: {
     alignItems: 'center',
@@ -223,6 +261,9 @@ const styles = StyleSheet.create({
     color: Colors.accent,
     marginBottom: 16,
   },
+  productsSection: {
+    marginBottom: 30,
+  },
   nextStepsBox: {
     backgroundColor: Colors.cardBackground,
     borderRadius: 16,
@@ -232,18 +273,13 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontFamily: Fonts.bodySemiBold,
     color: Colors.accent,
-    marginBottom: 16,
+    marginBottom: 8,
   },
-  option: {
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
-  },
-  optionText: {
-    fontSize: 15,
+  nextStepsSubtitle: {
+    fontSize: 14,
     fontFamily: Fonts.bodyRegular,
-    color: Colors.textPrimary,
-    lineHeight: 22,
+    color: Colors.textSecondary,
+    lineHeight: 20,
   },
   footer: {
     position: 'absolute',
@@ -255,6 +291,9 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: Colors.border,
     gap: 10,
+  },
+  secondaryButton: {
+    marginTop: 0,
   },
   skipButton: {
     marginTop: 0,
