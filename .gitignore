@@ -2,6 +2,11 @@
 /frontend/.env
 __pycache__/
 *.py[cod]
+
+backend/venv/
+node_modules/
+.DS_Store
+
 *$py.class
 *.so
 .Python
