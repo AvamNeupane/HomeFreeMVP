@@ -36,6 +36,14 @@ yarn-error.*
 # typescript
 *.tsbuildinfo
 
-# generated native folders
-/ios
+# Native folders — NOT fully generated-and-disposable here: ios/ contains
+# hand-written native code (ARMeasurementBridge.swift/.m,
+# ARMeasurementViewController.swift) with no other copy anywhere, so the
+# folder itself is tracked. Only the parts that are genuinely regenerable
+# (CocoaPods checkout, Xcode build output, per-user IDE state) are ignored.
+/ios/Pods/
+/ios/build/
+/ios/*.xcworkspace/xcuserdata/
+/ios/*.xcodeproj/xcuserdata/
+/ios/*.xcodeproj/project.xcworkspace/xcuserdata/
 /android
