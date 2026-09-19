@@ -1,33 +1,18 @@
 /**
- * App Color Palette
- * Minimal design with white background
+ * App Font Families
+ *
+ * FIX: this file used to be a byte-for-byte copy of Colors.js (a stray
+ * duplicate, not real font config) — every screen references
+ * Fonts.headingBold / Fonts.bodyRegular / Fonts.bodySemiBold, none of
+ * which existed here, so the custom fonts loaded via useFonts() in App.js
+ * were never actually applied anywhere; React Native just silently fell
+ * back to the system font. Mapped to the exact font keys loaded in App.js.
  */
 
 export default {
-  // Primary
-  white: '#FFFFFF',
-  
-  // Brand colors
-  primary: 'rgb(151, 188, 200)',    // Soft blue
-  secondary: 'rgb(255, 214, 186)',  // Peach
-  accent: 'rgb(85, 91, 110)',       // Dark blue-gray
-  
-  // Text
-  textPrimary: '#1D1D1F',
-  textSecondary: '#6E6E73',
-  textLight: '#8E8E93',
-  
-  // UI Elements
-  border: '#E5E5E7',
-  background: '#FFFFFF',
-  cardBackground: '#FAFAFA',
-  
-  // Status
-  success: '#34C759',
-  error: '#FF3B30',
-  warning: '#FF9500',
-  
-  // Overlays
-  overlay: 'rgba(0, 0, 0, 0.5)',
-  lightOverlay: 'rgba(0, 0, 0, 0.1)',
+  headingBold: 'LibreBaskerville_700Bold',
+  headingRegular: 'LibreBaskerville_400Regular',
+  bodyRegular: 'Montserrat_400Regular',
+  bodySemiBold: 'Montserrat_600SemiBold',
+  bodyBold: 'Montserrat_700Bold',
 };

@@ -19,7 +19,7 @@
  * hasMoreRooms is true.
  *
  * CHANGED (products): shows the matched product recommendations returned
- * alongside the AI text, each with image/price/reason/Amazon link.
+ * alongside the AI text, each with an icon/reason/Amazon link.
  *
  * CHANGED (back navigation): added a Back button at the top of the screen.
  *
@@ -27,31 +27,74 @@
  * works even if ItemSelectionScreen wasn't rebuilt yet.
  */
 
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { StyleSheet, Text, View, SafeAreaView, ScrollView, Alert } from 'react-native';
 import Markdown from 'react-native-markdown-display';
 import Colors from '../constants/Colors';
 import Fonts from '../constants/Fonts';
 import Button from '../components/Button';
+import Icon from '../components/Icon';
 import BackButton from '../components/BackButton';
 import AccuracyBadge from '../components/AccuracyBadge';
 import ProductCard from '../components/ProductCard';
+import { updateRoomStatus } from '../api';
 
-export default function RecommendationsScreen({ 
-  goToScreen, 
+export default function RecommendationsScreen({
+  goToScreen,
   goBack,
   canGoBack,
-  updateData, 
-  appData 
+  updateData,
+  appData,
+  apiBaseUrl,
+  sessionId
 }) {
   const currentRec = appData.currentRecommendation;
   const sessionItems = appData.selectedItems || appData.detectedItems || [];
   const currentItemIndex = appData.currentItemIndex || 0;
   const selectedRooms = appData.selectedRooms || [];
   const currentRoomIndex = appData.currentRoomIndex || 0;
+  const currentRoom = appData.currentRoom;
 
   const hasMoreItems = currentItemIndex < sessionItems.length - 1;
   const hasMoreRooms = currentRoomIndex < selectedRooms.length - 1;
+
+  // Flip the current room's status to 'completed' the moment there are no
+  // more selected items left to review for it — this is the room-selection
+  // screen's signal that the room is actually done (locked, greyed out)
+  // rather than just "started" (resumable). Runs above the early-return
+  // below so the hook always fires in the same order every render; the
+  // `markedRoomRef` guard stops it from re-firing (and re-PATCHing) on
+  // every re-render while this screen stays mounted.
+  const markedRoomRef = useRef(null);
+  useEffect(() => {
+    if (!currentRec || hasMoreItems || !currentRoom) return;
+    if (markedRoomRef.current === currentRoom) return;
+    markedRoomRef.current = currentRoom;
+    updateData({ roomStatuses: { ...(appData.roomStatuses || {}), [currentRoom]: 'completed' } });
+    updateRoomStatus(apiBaseUrl, sessionId, currentRoom, 'completed');
+  }, [currentRec, hasMoreItems, currentRoom]);
+
+  // CHANGED (crash fix): currentRecommendation can legitimately be null —
+  // reachable via "Organize Something Else" on the Final Report after
+  // recommendation state was cleared, or a resumed session that never set
+  // it. This used to read currentRec.intention with no guard and crash
+  // outright; now shows a recoverable screen instead.
+  if (!currentRec) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.emptyContainer}>
+          <Icon name="question" size={48} color={Colors.icon} style={styles.emptyEmoji} />
+          <Text style={styles.emptyTitle}>Nothing to Show Yet</Text>
+          <Text style={styles.emptyText}>
+            There's no active recommendation right now. Pick an area to organize, or head to your rooms.
+          </Text>
+          <Button title="Choose an Area" onPress={() => goToScreen('itemSelection')} />
+          <Button title="Choose a Room" onPress={() => goToScreen('roomSelection')} variant="outline" style={{ marginTop: 10 }} />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   const products = currentRec.products || [];
 
   const handleNextArea = () => {
@@ -65,8 +108,9 @@ export default function RecommendationsScreen({
       currentItem: nextItem,
       areaPhotos: []
     });
-    
-    goToScreen('measureSpace');
+
+    // CHANGED (flow reorder): Area Photos now runs before Measure Space.
+    goToScreen('areaPhoto');
   };
 
   const handleNextRoom = () => {
@@ -109,10 +153,34 @@ export default function RecommendationsScreen({
       'Are you done organizing all areas? We\'ll create your comprehensive report.',
       [
         { text: 'Not Yet', style: 'cancel' },
-        { 
-          text: 'Yes, Create Report', 
+        {
+          text: 'Yes, Create Report',
           onPress: () => goToScreen('finalReport')
         }
+      ]
+    );
+  };
+
+  // CHANGED (skip is final): distinct from handleFinish's "you're done"
+  // copy — this path is reachable while areas/rooms are still unfinished,
+  // so the confirmation says so explicitly. Skipping is a deliberate,
+  // final choice per design decision: the skipped room/areas are NOT
+  // revisitable afterward (Room Selection greys them out permanently).
+  const handleSkipToReport = () => {
+    if (!hasMoreItems && !hasMoreRooms) {
+      handleFinish();
+      return;
+    }
+    Alert.alert(
+      'Skip the Rest and Finish?',
+      'You still have areas or rooms you haven’t organized this session. Skipping now finalizes what you’ve done so far — the parts you skip won’t be revisitable afterward.',
+      [
+        { text: 'Keep Going', style: 'cancel' },
+        {
+          text: 'Skip & Generate Report',
+          style: 'destructive',
+          onPress: () => goToScreen('finalReport'),
+        },
       ]
     );
   };
@@ -123,7 +191,7 @@ export default function RecommendationsScreen({
         <BackButton onPress={goBack} visible={canGoBack} />
 
         <View style={styles.header}>
-          <Text style={styles.emoji}>✨</Text>
+          <Icon name="sparkle" size={44} color={Colors.icon} style={styles.emoji} />
           <Text style={styles.title}>Understood!</Text>
           <Text style={styles.subtitle}>
             Here's your personalized action plan
@@ -156,7 +224,9 @@ export default function RecommendationsScreen({
         <View style={styles.nextStepsBox}>
           <Text style={styles.nextStepsTitle}>What's next?</Text>
           <Text style={styles.nextStepsSubtitle}>
-            You can always come back and organize more — nothing here is final.
+            {hasMoreItems || hasMoreRooms
+              ? 'You can organize more areas or rooms now — once you skip ahead to the final report, anything left undone this session is locked in as-is.'
+              : 'This room is complete. You can still add another room or area before generating your report.'}
           </Text>
         </View>
       </ScrollView>
@@ -180,22 +250,26 @@ export default function RecommendationsScreen({
         )}
 
         <Button
-          title="📦 Organize Another Area"
+          title="Organize Another Area"
+          icon="box"
           onPress={handleOrganizeAnotherArea}
           variant="secondary"
           style={styles.secondaryButton}
         />
 
+        {!hasMoreItems && (
+          <Button
+            title="Organize Another Room"
+            icon="home"
+            onPress={handleOrganizeAnotherRoom}
+            variant="secondary"
+            style={styles.secondaryButton}
+          />
+        )}
+
         <Button
-          title="🏠 Organize Another Room"
-          onPress={handleOrganizeAnotherRoom}
-          variant="secondary"
-          style={styles.secondaryButton}
-        />
-        
-        <Button 
           title="Skip to Final Report"
-          onPress={handleFinish}
+          onPress={handleSkipToReport}
           variant="outline"
           style={styles.skipButton}
         />
@@ -205,6 +279,15 @@ export default function RecommendationsScreen({
 }
 
 const styles = StyleSheet.create({
+  emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 40,
+  },
+  emptyEmoji: { fontSize: 60, marginBottom: 16 },
+  emptyTitle: { fontSize: 22, fontFamily: Fonts.headingBold, color: Colors.accent, marginBottom: 10 },
+  emptyText: { fontSize: 15, fontFamily: Fonts.bodyRegular, color: Colors.textSecondary, textAlign: 'center', marginBottom: 24, lineHeight: 22 },
   container: {
     flex: 1,
     backgroundColor: Colors.white,

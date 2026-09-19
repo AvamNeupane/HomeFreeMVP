@@ -3,17 +3,19 @@
  */
 
 import React from 'react';
-import { StyleSheet, Text, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { StyleSheet, Text, View, TouchableOpacity, ActivityIndicator } from 'react-native';
 import Colors from '../constants/Colors';
 import Fonts from '../constants/Fonts';
+import Icon from './Icon';
 
-export default function Button({ 
-  title, 
-  onPress, 
-  disabled = false, 
+export default function Button({
+  title,
+  onPress,
+  disabled = false,
   loading = false,
   variant = 'primary',
-  style 
+  icon,
+  style
 }) {
   
   const getButtonStyle = () => {
@@ -52,6 +54,11 @@ export default function Button({
     >
       {loading ? (
         <ActivityIndicator color={variant === 'outline' ? Colors.primary : Colors.white} />
+      ) : icon ? (
+        <View style={styles.iconRow}>
+          <Icon name={icon} size={18} color={variant === 'outline' ? Colors.primary : Colors.white} style={styles.icon} />
+          <Text style={[styles.text, getTextStyle()]}>{title}</Text>
+        </View>
       ) : (
         <Text style={[styles.text, getTextStyle()]}>{title}</Text>
       )}
@@ -90,5 +97,12 @@ const styles = StyleSheet.create({
   },
   outlineText: {
     color: Colors.primary,
+  },
+  iconRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  icon: {
+    marginRight: 8,
   },
 });

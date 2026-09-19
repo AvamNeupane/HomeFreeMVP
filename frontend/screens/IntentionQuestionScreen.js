@@ -1,358 +1,361 @@
 /**
- * Intention Question Screen - Ask user about their goals
+ * Natasha's guided intake chat for one area.
  *
- * CHANGED (Task 5): the POST body now also includes organization_priorities
- * and visual_style, collected on the new PrioritiesScreen, so the backend
- * can actually use them (see app.py's _format_priorities_block). Without
- * this change, PrioritiesScreen would collect data that never reaches the
- * recommendation prompt.
- *
- * CHANGED (keyboard fix): the text input used to be a fixed tall box with
- * no way to dismiss the keyboard once you started typing. It now:
- *   - starts smaller (3 lines) and grows as you type, up to a max height,
- *     instead of always reserving a big empty box
- *   - has an explicit "Hide Keyboard" control right under the input
- *   - dismisses the keyboard if you tap anywhere else on the screen
- * CHANGED (back navigation): added a Back button at the top of the screen.
+ * CHANGED (direction selection): the chat used to silently infer a single
+ * "path" and jump straight to recommendations once done. It now shows the
+ * 1-3 directions Natasha proposes (e.g. "Mess Cleanup" / "Style Refresh" /
+ * "Both") as tappable choices — the user picks, nothing is auto-decided
+ * for them. Picking a direction hands off to DirectionPhotosScreen for a
+ * couple of targeted follow-up photos before the recommendation is
+ * generated.
+ * CHANGED (no more echoing): the backend prompt now explicitly forbids
+ * repeating the user's message back to them; this screen has no client
+ * logic that did that, but is worth noting alongside the above.
  */
 
-import React, { useState } from 'react';
-import { 
-  StyleSheet, 
-  Text, 
-  View, 
-  SafeAreaView, 
-  TextInput, 
-  KeyboardAvoidingView,
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  StyleSheet,
+  Text,
+  View,
+  SafeAreaView,
+  TextInput,
   Platform,
   ScrollView,
   Alert,
   ActivityIndicator,
   Keyboard,
-  TouchableWithoutFeedback,
   TouchableOpacity,
 } from 'react-native';
 import Colors from '../constants/Colors';
+import { apiFetch } from '../api';
 import Fonts from '../constants/Fonts';
 import Button from '../components/Button';
 import BackButton from '../components/BackButton';
+import Icon from '../components/Icon';
 
-export default function IntentionQuestionScreen({ 
-  goToScreen, 
+export default function IntentionQuestionScreen({
+  goToScreen,
   goBack,
   canGoBack,
-  updateData, 
+  updateData,
   appData,
   apiBaseUrl,
   sessionId
 }) {
-  const currentQuestion = appData.currentQuestion;
   const currentContext = appData.currentContext;
   const currentItem = appData.currentItem;
-  
+
+  const [chatMessages, setChatMessages] = useState([]); // {role: 'natasha'|'user', text}
   const [userInput, setUserInput] = useState('');
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [inputHeight, setInputHeight] = useState(70);
-  const [isFocused, setIsFocused] = useState(false);
+  const [isStarting, setIsStarting] = useState(true);
+  const [isSending, setIsSending] = useState(false);
+  const [pathOptions, setPathOptions] = useState([]);
+  const [isConfirming, setIsConfirming] = useState(false);
+  // CHANGED (perceived speed): a single Gemini exchange normally takes
+  // ~2-4s (measured, not a bug — see OVERVIEW.md) — "Natasha is typing..."
+  // alone can start to feel stuck around that mark. Swaps to a reassuring
+  // second line rather than pretending it's instant.
+  const [isTakingAWhile, setIsTakingAWhile] = useState(false);
+  const scrollRef = useRef(null);
+  // CHANGED (keyboard covering the input, take 2): KeyboardAvoidingView's
+  // `keyboardVerticalOffset` relies on it correctly measuring its own
+  // on-screen position, which — especially after the Expo SDK 57 / New
+  // Architecture upgrade — was landing wrong on-device even after tuning
+  // the offset (still reported as covering the text). Tracking the real
+  // keyboard height directly from OS keyboard events and applying it as
+  // padding is deterministic instead: it's driven by what the OS actually
+  // reports, not by a layout measurement that can race or miscalculate.
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
 
-  const MIN_INPUT_HEIGHT = 70;
-  const MAX_INPUT_HEIGHT = 160;
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSub = Keyboard.addListener(showEvent, (e) => {
+      setKeyboardHeight(e?.endCoordinates?.height || 0);
+      scrollToEnd();
+    });
+    const hideSub = Keyboard.addListener(hideEvent, () => setKeyboardHeight(0));
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
-  const handleSubmit = async () => {
-    if (!userInput.trim()) {
-      Alert.alert('Input Required', 'Please share your goals for this area.');
+  useEffect(() => {
+    // A deep resume seeds the transcript already recorded server-side
+    // (see computeRoomResumeTarget) — calling startChat()'s no-message
+    // POST here would ask the model for a brand new turn on top of it,
+    // silently advancing the conversation the user never asked to
+    // continue. Render the restored history instead and only hit the
+    // API once they actually send something.
+    if (appData.resumeChat) {
+      setChatMessages(appData.resumeChat.messages || []);
+      setPathOptions(appData.resumeChat.pathOptions || []);
+      setIsStarting(false);
+      updateData({ resumeChat: null });
+      scrollToEnd();
       return;
     }
+    startChat();
+  }, []);
 
+  useEffect(() => {
+    if (!isStarting && !isSending) {
+      setIsTakingAWhile(false);
+      return;
+    }
+    const timer = setTimeout(() => setIsTakingAWhile(true), 2500);
+    return () => clearTimeout(timer);
+  }, [isStarting, isSending]);
+
+  const scrollToEnd = () => {
+    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
+  };
+
+  const startChat = async () => {
     if (!sessionId) {
       Alert.alert('Error', 'Session not initialized. Please restart the app.');
       return;
     }
-
-    Keyboard.dismiss();
-    setIsProcessing(true);
-
+    setIsStarting(true);
     try {
-      console.log('📤 Submitting user intention:', userInput);
-
-      const response = await fetch(`${apiBaseUrl}/area/recommendations`, {
+      const response = await apiFetch(`${apiBaseUrl}/area/chat`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           session_id: sessionId,
-          user_intention: userInput.trim(),
-          organization_priorities: appData.organizationPriorities || [],
-          visual_style: appData.visualStyle || null
+          area_name: currentItem.name,
+          room_type: appData.currentRoom,
         }),
       });
-
       const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || `Server error: ${response.status}`);
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Failed to start conversation');
       }
-
-      if (!data.success) {
-        throw new Error(data.error || 'Failed to generate recommendations');
-      }
-
-      console.log('✅ Recommendations generated');
-
-      // Store recommendations
-      const newRecommendation = {
-        area: currentItem.name,
-        intention: userInput.trim(),
-        recommendations: data.recommendations,
-        products: data.products || []
-      };
-
-      const allRecs = [...(appData.allRecommendations || []), newRecommendation];
-      
-      updateData({
-        currentRecommendation: newRecommendation,
-        allRecommendations: allRecs
-      });
-
-      goToScreen('recommendations');
-
+      setChatMessages([{ role: 'natasha', text: data.reply }]);
+      if (data.done) setPathOptions(data.path_options || []);
     } catch (error) {
-      console.error('❌ Submission error:', error);
-      Alert.alert(
-        'Processing Error',
-        `Failed to generate recommendations: ${error.message}\n\nPlease try again.`,
-        [{ text: 'OK' }]
-      );
+      console.error('❌ Chat start error:', error);
+      Alert.alert('Error', `Could not start the conversation: ${error.message}`);
     } finally {
-      setIsProcessing(false);
+      setIsStarting(false);
+      scrollToEnd();
     }
   };
 
-  // Quick suggestion options
-  const quickSuggestions = [
-    '🧹 I want to declutter and tidy up',
-    '✨ I want to make it more beautiful',
-    '📦 I need better organization',
-    '🎯 I want to maximize space',
-  ];
+  const handleSend = async () => {
+    const text = userInput.trim();
+    if (!text || isSending) return;
+
+    Keyboard.dismiss();
+    const optimistic = [...chatMessages, { role: 'user', text }];
+    setChatMessages(optimistic);
+    setUserInput('');
+    setIsSending(true);
+    scrollToEnd();
+
+    try {
+      const response = await apiFetch(`${apiBaseUrl}/area/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: sessionId,
+          area_name: currentItem.name,
+          room_type: appData.currentRoom,
+          user_message: text,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Failed to send message');
+      }
+
+      setChatMessages([...optimistic, { role: 'natasha', text: data.reply, guardrail: data.guardrail_triggered }]);
+      scrollToEnd();
+
+      if (data.done) setPathOptions(data.path_options || []);
+    } catch (error) {
+      console.error('❌ Chat send error:', error);
+      Alert.alert('Error', `Could not send your message: ${error.message}`);
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  const handleSelectDirection = async (option) => {
+    setIsConfirming(true);
+    try {
+      const intention = chatMessages.filter((m) => m.role === 'user').map((m) => m.text).join(' ')
+        || option.description || option.label;
+
+      const response = await apiFetch(`${apiBaseUrl}/area/confirm-direction`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: sessionId,
+          area_name: currentItem.name,
+          room_type: appData.currentRoom,
+          selected_path: option,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Failed to confirm direction');
+      }
+
+      updateData({
+        chatIntention: intention,
+        chatPathLabel: data.chat_path_label,
+        followUpPhotoGuidance: data.follow_up_photo_guidance || [],
+      });
+
+      goToScreen('directionPhotos');
+    } catch (error) {
+      console.error('❌ Confirm direction error:', error);
+      Alert.alert('Error', `Could not confirm your choice: ${error.message}`);
+    } finally {
+      setIsConfirming(false);
+    }
+  };
 
   return (
     <SafeAreaView style={styles.container}>
-      <KeyboardAvoidingView 
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.keyboardView}
-      >
-        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-          <ScrollView
-            contentContainerStyle={styles.scrollContent}
-            keyboardShouldPersistTaps="handled"
-          >
-            <BackButton onPress={goBack} visible={canGoBack} />
+      <View style={[styles.keyboardView, { paddingBottom: keyboardHeight }]}>
+        <BackButton onPress={goBack} visible={canGoBack} style={styles.backButton} />
 
-            <View style={styles.header}>
-              <Text style={styles.emoji}>💭</Text>
-              <Text style={styles.title}>One quick question...</Text>
+        <View style={styles.header}>
+          <Icon name="chat" size={40} color={Colors.icon} style={styles.emoji} />
+          <Text style={styles.title}>Let's talk it through</Text>
+        </View>
+
+        <ScrollView
+          ref={scrollRef}
+          style={styles.chatScroll}
+          contentContainerStyle={styles.chatContent}
+          onContentSizeChange={scrollToEnd}
+        >
+          {currentContext && (
+            <View style={styles.contextBox}>
+              <Text style={styles.contextLabel}>What we see:</Text>
+              <Text style={styles.contextText}>{currentContext}</Text>
             </View>
+          )}
 
-            {currentContext && (
-              <View style={styles.contextBox}>
-                <Text style={styles.contextLabel}>What we see:</Text>
-                <Text style={styles.contextText}>{currentContext}</Text>
-              </View>
-            )}
-
-            <View style={styles.questionBox}>
-              <Text style={styles.question}>{currentQuestion}</Text>
+          {chatMessages.map((m, i) => (
+            <View
+              key={i}
+              style={[
+                styles.bubble,
+                m.role === 'natasha' ? styles.bubbleNatasha : styles.bubbleUser,
+                m.guardrail && styles.bubbleGuardrail,
+              ]}
+            >
+              <Text style={[styles.bubbleText, m.role === 'user' && styles.bubbleTextUser]}>{m.text}</Text>
             </View>
+          ))}
 
-            <View style={styles.inputSection}>
-              <Text style={styles.inputLabel}>Your answer:</Text>
-              <TextInput
-                style={[styles.textInput, { height: Math.max(MIN_INPUT_HEIGHT, Math.min(inputHeight, MAX_INPUT_HEIGHT)) }]}
-                value={userInput}
-                onChangeText={setUserInput}
-                onFocus={() => setIsFocused(true)}
-                onContentSizeChange={(e) =>
-                  setInputHeight(e.nativeEvent.contentSize.height + 24)
-                }
-                placeholder="Type your goals here..."
-                placeholderTextColor={Colors.textLight}
-                multiline
-                scrollEnabled={inputHeight > MAX_INPUT_HEIGHT}
-                textAlignVertical="top"
-              />
-              {isFocused && (
-                <TouchableOpacity
-                  style={styles.hideKeyboardButton}
-                  onPress={() => {
-                    Keyboard.dismiss();
-                    setIsFocused(false);
-                  }}
-                >
-                  <Text style={styles.hideKeyboardText}>⌄ Hide Keyboard</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-
-            <View style={styles.suggestionsSection}>
-              <Text style={styles.suggestionsLabel}>Quick options:</Text>
-              {quickSuggestions.map((suggestion, index) => (
-                <Button
-                  key={index}
-                  title={suggestion}
-                  onPress={() => {
-                    Keyboard.dismiss();
-                    setUserInput(suggestion.split(' ').slice(1).join(' '));
-                  }}
-                  variant="outline"
-                  style={styles.suggestionButton}
-                />
-              ))}
-            </View>
-          </ScrollView>
-        </TouchableWithoutFeedback>
-
-        <View style={styles.footer}>
-          {isProcessing ? (
-            <View style={styles.processingContainer}>
-              <ActivityIndicator size="large" color={Colors.primary} />
-              <Text style={styles.processingText}>
-                Generating personalized recommendations...
+          {(isStarting || isSending) && (
+            <View style={styles.typingRow}>
+              <ActivityIndicator size="small" color={Colors.primary} />
+              <Text style={styles.typingText}>
+                {isTakingAWhile ? 'Still thinking it through...' : 'Typing...'}
               </Text>
             </View>
-          ) : (
-            <Button 
-              title="Submit"
-              onPress={handleSubmit}
-              disabled={!userInput.trim()}
-            />
           )}
-        </View>
-      </KeyboardAvoidingView>
+
+          {pathOptions.length > 0 && !isConfirming && (
+            <View style={styles.directionSection}>
+              <Text style={styles.directionLabel}>Choose a direction:</Text>
+              {pathOptions.map((opt) => (
+                <TouchableOpacity
+                  key={opt.key}
+                  style={styles.directionCard}
+                  onPress={() => handleSelectDirection(opt)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.directionCardLabel}>{opt.label}</Text>
+                  {!!opt.description && <Text style={styles.directionCardDesc}>{opt.description}</Text>}
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+
+          {isConfirming && (
+            <View style={styles.typingRow}>
+              <ActivityIndicator size="small" color={Colors.primary} />
+              <Text style={styles.typingText}>Got it — setting things up...</Text>
+            </View>
+          )}
+        </ScrollView>
+
+        {pathOptions.length === 0 && (
+          <View style={styles.footer}>
+            <View style={styles.inputRow}>
+              <TextInput
+                style={styles.textInput}
+                value={userInput}
+                onChangeText={setUserInput}
+                onFocus={scrollToEnd}
+                placeholder="Type your answer..."
+                placeholderTextColor={Colors.textLight}
+                multiline
+                editable={!isStarting && !isSending}
+              />
+              <Button title="Send" onPress={handleSend} disabled={!userInput.trim() || isStarting || isSending} style={styles.sendButton} />
+            </View>
+          </View>
+        )}
+      </View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.white,
-  },
-  keyboardView: {
-    flex: 1,
-  },
-  scrollContent: {
-    padding: 30,
-    paddingBottom: 120,
-  },
-  header: {
-    alignItems: 'center',
-    marginBottom: 30,
-  },
-  emoji: {
-    fontSize: 60,
-    marginBottom: 12,
-  },
-  title: {
-    fontSize: 28,
-    fontFamily: Fonts.headingBold,
-    color: Colors.accent,
-    textAlign: 'center',
-  },
-  contextBox: {
+  container: { flex: 1, backgroundColor: Colors.white },
+  keyboardView: { flex: 1 },
+  backButton: { marginLeft: 20, marginTop: 10 },
+  header: { alignItems: 'center', marginBottom: 10, paddingHorizontal: 30 },
+  emoji: { fontSize: 44, marginBottom: 6 },
+  title: { fontSize: 24, fontFamily: Fonts.headingBold, color: Colors.accent, textAlign: 'center' },
+  chatScroll: { flex: 1 },
+  chatContent: { padding: 20, paddingBottom: 20 },
+  contextBox: { backgroundColor: Colors.cardBackground, borderRadius: 12, padding: 16, marginBottom: 16 },
+  contextLabel: { fontSize: 12, fontFamily: Fonts.bodySemiBold, color: Colors.textSecondary, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1 },
+  contextText: { fontSize: 14, fontFamily: Fonts.bodyRegular, color: Colors.textPrimary, lineHeight: 20 },
+  bubble: { maxWidth: '85%', borderRadius: 16, paddingVertical: 12, paddingHorizontal: 16, marginBottom: 10 },
+  bubbleNatasha: { backgroundColor: Colors.primary, alignSelf: 'flex-start', borderBottomLeftRadius: 4 },
+  bubbleUser: { backgroundColor: Colors.cardBackground, alignSelf: 'flex-end', borderBottomRightRadius: 4 },
+  bubbleGuardrail: { backgroundColor: Colors.warning },
+  bubbleText: { fontSize: 15, fontFamily: Fonts.bodyRegular, color: Colors.white, lineHeight: 22 },
+  bubbleTextUser: { color: Colors.textPrimary },
+  typingRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
+  typingText: { fontSize: 13, fontFamily: Fonts.bodyRegular, color: Colors.textSecondary },
+  directionSection: { marginTop: 16 },
+  directionLabel: { fontSize: 13, fontFamily: Fonts.bodySemiBold, color: Colors.textSecondary, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.5 },
+  directionCard: {
     backgroundColor: Colors.cardBackground,
-    borderRadius: 12,
+    borderRadius: 14,
+    borderWidth: 2,
+    borderColor: Colors.border,
     padding: 16,
-    marginBottom: 20,
+    marginBottom: 10,
   },
-  contextLabel: {
-    fontSize: 12,
-    fontFamily: Fonts.bodySemiBold,
-    color: Colors.textSecondary,
-    marginBottom: 8,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-  },
-  contextText: {
-    fontSize: 14,
-    fontFamily: Fonts.bodyRegular,
-    color: Colors.textPrimary,
-    lineHeight: 20,
-  },
-  questionBox: {
-    backgroundColor: Colors.primary,
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 30,
-  },
-  question: {
-    fontSize: 18,
-    fontFamily: Fonts.bodySemiBold,
-    color: Colors.white,
-    lineHeight: 26,
-  },
-  inputSection: {
-    marginBottom: 30,
-  },
-  inputLabel: {
-    fontSize: 14,
-    fontFamily: Fonts.bodySemiBold,
-    color: Colors.textPrimary,
-    marginBottom: 12,
-  },
+  directionCardLabel: { fontSize: 16, fontFamily: Fonts.bodySemiBold, color: Colors.accent, marginBottom: 4 },
+  directionCardDesc: { fontSize: 13, fontFamily: Fonts.bodyRegular, color: Colors.textSecondary, lineHeight: 18 },
+  footer: { padding: 16, borderTopWidth: 1, borderTopColor: Colors.border },
+  inputRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 10 },
   textInput: {
+    flex: 1,
     backgroundColor: Colors.cardBackground,
-    borderRadius: 12,
-    padding: 16,
-    fontSize: 16,
+    borderRadius: 16,
+    padding: 14,
+    fontSize: 15,
     fontFamily: Fonts.bodyRegular,
     color: Colors.textPrimary,
     borderWidth: 1,
     borderColor: Colors.border,
+    maxHeight: 100,
   },
-  hideKeyboardButton: {
-    alignSelf: 'flex-end',
-    marginTop: 8,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-  },
-  hideKeyboardText: {
-    fontSize: 13,
-    fontFamily: Fonts.bodySemiBold,
-    color: Colors.primary,
-  },
-  suggestionsSection: {
-    gap: 10,
-  },
-  suggestionsLabel: {
-    fontSize: 14,
-    fontFamily: Fonts.bodySemiBold,
-    color: Colors.textSecondary,
-    marginBottom: 8,
-  },
-  suggestionButton: {
-    marginBottom: 0,
-  },
-  footer: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    padding: 20,
-    backgroundColor: Colors.white,
-    borderTopWidth: 1,
-    borderTopColor: Colors.border,
-  },
-  processingContainer: {
-    alignItems: 'center',
-    paddingVertical: 20,
-  },
-  processingText: {
-    marginTop: 12,
-    fontSize: 15,
-    fontFamily: Fonts.bodyRegular,
-    color: Colors.textSecondary,
-    textAlign: 'center',
-  },
+  sendButton: { paddingHorizontal: 20, minHeight: 48 },
 });

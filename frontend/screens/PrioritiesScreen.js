@@ -11,6 +11,7 @@ import { StyleSheet, Text, View, SafeAreaView, ScrollView, TouchableOpacity } fr
 import Colors from '../constants/Colors';
 import Fonts from '../constants/Fonts';
 import Button from '../components/Button';
+import Icon from '../components/Icon';
 
 const PRIORITY_OPTIONS = [
   'Maximize storage',
@@ -48,7 +49,7 @@ export default function PrioritiesScreen({ goToScreen, updateData, appData }) {
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <View style={styles.header}>
-          <Text style={styles.emoji}>🎯</Text>
+          <Icon name="target" size={44} color={Colors.icon} style={styles.emoji} />
           <Text style={styles.title}>What matters most?</Text>
           <Text style={styles.subtitle}>
             Pick as many as apply — this is optional but helps us tailor advice.
@@ -61,12 +62,12 @@ export default function PrioritiesScreen({ goToScreen, updateData, appData }) {
             return (
               <TouchableOpacity
                 key={option}
-                style={[styles.chip, selected && styles.chipSelected]}
+                style={[styles.chip, styles.chipRow, selected && styles.chipSelected]}
                 onPress={() => togglePriority(option)}
                 activeOpacity={0.7}
               >
+                <Icon name={selected ? 'checkboxChecked' : 'checkboxEmpty'} size={16} color={selected ? Colors.icon : Colors.textLight} style={styles.chipCheckbox} />
                 <Text style={[styles.chipText, selected && styles.chipTextSelected]}>
-                  {selected ? '☑ ' : '☐ '}
                   {option}
                 </Text>
               </TouchableOpacity>
@@ -158,6 +159,13 @@ const styles = StyleSheet.create({
   chipSelected: {
     borderColor: Colors.primary,
     backgroundColor: Colors.white,
+  },
+  chipRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  chipCheckbox: {
+    marginRight: 8,
   },
   chipText: {
     fontSize: 14,

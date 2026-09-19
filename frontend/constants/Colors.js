@@ -30,4 +30,11 @@ export default {
   // Overlays
   overlay: 'rgba(0, 0, 0, 0.5)',
   lightOverlay: 'rgba(0, 0, 0, 0.1)',
+
+  // Icons — thin-line teal icon set (see components/Icon.js). Kept
+  // separate from `primary`/`accent` so the icon system can evolve
+  // independently of the rest of the palette.
+  icon: '#1F7A72',
+  iconDark: '#12433F',
+  iconBg: '#EAF4F3',
 };

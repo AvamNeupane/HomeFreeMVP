@@ -2,24 +2,29 @@
  * Photo Card Component for displaying photo guidance
  * Supports both camera capture and gallery selection
  *
- * CHANGED (delete photos): a photo can now be removed outright (onDelete),
- * not just retaken. Retake and Delete are both shown as small pill buttons
- * over the image.
+ * CHANGED (multi-photo categories): a category used to hold exactly one
+ * photo — taking a new one silently replaced the old one. `photos` is now
+ * an array, so a category like "Seating Area" can hold as many shots as
+ * the user wants (a wide shot plus a couple of close-ups), each removable
+ * on its own instead of the whole category being all-or-nothing.
  */
 
 import React from 'react';
-import { StyleSheet, Text, View, Image, TouchableOpacity } from 'react-native';
+import { StyleSheet, Text, View, Image, TouchableOpacity, ScrollView } from 'react-native';
 import Colors from '../constants/Colors';
 import Fonts from '../constants/Fonts';
+import Icon from './Icon';
 
-export default function PhotoCard({ 
-  photo, 
-  guidance, 
+export default function PhotoCard({
+  photos,
+  guidance,
   onTakePhoto,
   onChooseFromGallery,
-  onDelete,
-  index 
+  onDeletePhoto,
+  index
 }) {
+  const photoList = photos || [];
+
   return (
     <View style={styles.card}>
       <View style={styles.header}>
@@ -33,47 +38,40 @@ export default function PhotoCard({
         </View>
       </View>
 
-      {photo ? (
-        <View style={styles.imageContainer}>
-          <Image source={{ uri: photo }} style={styles.image} />
-          <View style={styles.imageActions}>
-            <TouchableOpacity 
-              style={styles.retakeButton}
-              onPress={onTakePhoto}
-            >
-              <Text style={styles.retakeText}>↻ Retake</Text>
-            </TouchableOpacity>
-            {onDelete && (
-              <TouchableOpacity 
-                style={styles.deleteButton}
-                onPress={onDelete}
-              >
-                <Text style={styles.deleteText}>🗑 Delete</Text>
+      {photoList.length > 0 && (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.thumbRow} contentContainerStyle={styles.thumbRowContent}>
+          {photoList.map((uri, i) => (
+            <View key={uri + i} style={styles.thumbWrap}>
+              <Image source={{ uri }} style={styles.thumb} />
+              <TouchableOpacity style={styles.thumbDelete} onPress={() => onDeletePhoto(uri)}>
+                <Icon name="close" size={11} color={Colors.white} strokeWidth={12} />
               </TouchableOpacity>
-            )}
-          </View>
-        </View>
-      ) : (
-        <View style={styles.buttonContainer}>
-          <TouchableOpacity 
-            style={[styles.actionButton, styles.cameraButton]}
-            onPress={onTakePhoto}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.actionIcon}>📷</Text>
-            <Text style={[styles.actionText, styles.cameraButtonText]}>Take Photo</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity 
-            style={[styles.actionButton, styles.galleryButton]}
-            onPress={onChooseFromGallery}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.actionIcon}>🖼️</Text>
-            <Text style={[styles.actionText, styles.galleryButtonText]}>Choose from Gallery</Text>
-          </TouchableOpacity>
-        </View>
+            </View>
+          ))}
+        </ScrollView>
       )}
+
+      <View style={styles.buttonContainer}>
+        <TouchableOpacity
+          style={[styles.actionButton, styles.cameraButton]}
+          onPress={onTakePhoto}
+          activeOpacity={0.8}
+        >
+          <Icon name="camera" size={22} color={Colors.white} style={styles.actionIcon} />
+          <Text style={[styles.actionText, styles.cameraButtonText]}>
+            {photoList.length > 0 ? 'Add Another Photo' : 'Take Photo'}
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.actionButton, styles.galleryButton]}
+          onPress={onChooseFromGallery}
+          activeOpacity={0.8}
+        >
+          <Icon name="gallery" size={22} color={Colors.textPrimary} style={styles.actionIcon} />
+          <Text style={[styles.actionText, styles.galleryButtonText]}>Choose from Gallery</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
@@ -123,42 +121,35 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.bodySemiBold,
     color: Colors.white,
   },
-  imageContainer: {
+  thumbRow: {
+    marginBottom: 12,
+  },
+  thumbRowContent: {
+    gap: 10,
+  },
+  thumbWrap: {
     position: 'relative',
   },
-  image: {
-    width: '100%',
-    height: 200,
+  thumb: {
+    width: 100,
+    height: 100,
     borderRadius: 12,
     backgroundColor: Colors.cardBackground,
   },
-  imageActions: {
+  thumbDelete: {
     position: 'absolute',
-    top: 8,
-    right: 8,
-    flexDirection: 'row',
-    gap: 8,
+    top: 4,
+    right: 4,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  retakeButton: {
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
-  },
-  retakeText: {
+  thumbDeleteText: {
     color: Colors.white,
-    fontSize: 12,
-    fontFamily: Fonts.bodySemiBold,
-  },
-  deleteButton: {
-    backgroundColor: 'rgba(192, 57, 43, 0.85)',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
-  },
-  deleteText: {
-    color: Colors.white,
-    fontSize: 12,
+    fontSize: 11,
     fontFamily: Fonts.bodySemiBold,
   },
   buttonContainer: {

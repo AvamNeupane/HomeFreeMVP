@@ -17,10 +17,12 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.avamneupane.homeorganizer",
+      "buildNumber": "4",
       "infoPlist": {
         "NSCameraUsageDescription": "We use your camera to measure shelves and drawers with AR.",
         "NSPhotoLibraryUsageDescription": "This app needs photo library access to select and save room photos.",
-        "NSPhotoLibraryAddUsageDescription": "This app needs permission to save your organization reports."
+        "NSPhotoLibraryAddUsageDescription": "This app needs permission to save your organization reports.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
@@ -46,7 +48,11 @@
           "photosPermission": "Allow Home Organizer to access your photos.",
           "cameraPermission": "Allow Home Organizer to use your camera."
         }
-      ]
+      ],
+      "expo-font",
+      "expo-sharing",
+      "expo-splash-screen",
+      "expo-status-bar"
     ],
     "extra": {
       "eas": {
@@ -54,7 +60,7 @@
       }
     },
     "runtimeVersion": {
-      "policy": "appVersion"
+      "policy": "fingerprint"
     },
     "updates": {
       "url": "https://u.expo.dev/15a43cf3-f338-4d2d-a31a-32c389f8255b"

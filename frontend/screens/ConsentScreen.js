@@ -9,6 +9,7 @@ import { StyleSheet, Text, View, SafeAreaView, ScrollView } from 'react-native';
 import Colors from '../constants/Colors';
 import Fonts from '../constants/Fonts';
 import Button from '../components/Button';
+import Icon from '../components/Icon';
 
 export default function ConsentScreen({ goToScreen, updateData }) {
   const handleAgree = () => {
@@ -20,7 +21,7 @@ export default function ConsentScreen({ goToScreen, updateData }) {
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <View style={styles.header}>
-          <Text style={styles.emoji}>🔒</Text>
+          <Icon name="lock" size={48} color={Colors.icon} style={styles.emoji} />
           <Text style={styles.title}>Before we get started</Text>
         </View>
 

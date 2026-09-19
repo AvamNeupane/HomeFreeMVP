@@ -1,0 +1,3 @@
+# Test-only dependencies — kept separate from requirements.txt so Railway's
+# production install doesn't pull pytest into the deployed backend.
+pytest==8.3.4
