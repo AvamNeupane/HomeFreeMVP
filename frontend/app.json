@@ -61,9 +61,7 @@
         "projectId": "15a43cf3-f338-4d2d-a31a-32c389f8255b"
       }
     },
-    "runtimeVersion": {
-      "policy": "fingerprint"
-    },
+    "runtimeVersion": "1.0.0",
     "updates": {
       "url": "https://u.expo.dev/15a43cf3-f338-4d2d-a31a-32c389f8255b"
     },
