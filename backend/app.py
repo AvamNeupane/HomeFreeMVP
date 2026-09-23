@@ -268,6 +268,17 @@ def allowed_file(filename: str) -> bool:
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
+def _measurement_key(room_key: str, area_name: str) -> str:
+    """
+    session['measurements'] used to be keyed by area_name alone (e.g.
+    'Closet') — two different rooms with an area of the same name (two
+    bedrooms, or a restarted room re-detecting the same area name) would
+    silently overwrite each other's measurements. Composite key fixes that;
+    '||' is not a character either room keys or area names can contain.
+    """
+    return f"{room_key or 'unknown_room'}||{area_name}"
+
+
 # Bounding max_output_tokens keeps Gemini from running long past the point
 # a response is actually useful - most of our prompts want a small, tightly
 # structured JSON reply, and letting the model ramble past that just adds
@@ -1929,25 +1940,28 @@ def list_my_projects():
 @app.route('/session/create', methods=['POST'])
 def create_session():
     """
-    Create a new project/session. If accounts are enabled (USING_POSTGRES),
-    this requires a valid login token and ties the project to that user so
-    it can be listed/resumed later. Otherwise (SQLite fallback), sessions
-    stay anonymous exactly as before.
+    Create a new project/session. If accounts are enabled (USING_POSTGRES)
+    and a valid login token is sent, ties the project to that user so it
+    can be listed/resumed later. A request with NO Authorization header at
+    all is treated as Guest Mode — an anonymous project, same as every
+    session was before accounts existed (PostgresSessionStore's own
+    __setitem__ already supports a user-less INSERT for exactly this). A
+    token that IS present but invalid/expired is still a hard 401 — only a
+    genuinely absent header means "guest", never a rejected one.
     """
     user_id = None
     user_tier = 'paid'
 
     if USING_POSTGRES:
         auth_header = request.headers.get('Authorization', '')
-        if not auth_header.startswith('Bearer '):
-            return jsonify({'success': False, 'error': 'Missing or invalid Authorization header'}), 401
-        user_id = decode_token(auth_header[len('Bearer '):].strip())
-        if not user_id:
-            return jsonify({'success': False, 'error': 'Invalid or expired token'}), 401
-        user = sessions.get_user_by_id(user_id)
-        if not user:
-            return jsonify({'success': False, 'error': 'User not found'}), 404
-        user_tier = user['tier']
+        if auth_header.startswith('Bearer '):
+            user_id = decode_token(auth_header[len('Bearer '):].strip())
+            if not user_id:
+                return jsonify({'success': False, 'error': 'Invalid or expired token'}), 401
+            user = sessions.get_user_by_id(user_id)
+            if not user:
+                return jsonify({'success': False, 'error': 'User not found'}), 404
+            user_tier = user['tier']
 
     try:
         session_id = str(uuid.uuid4())
@@ -1961,7 +1975,7 @@ def create_session():
             'user_tier': user_tier,
         }
 
-        if USING_POSTGRES:
+        if user_id:
             sessions.create_for_user(session_id, user_id, project_data)
         else:
             sessions[session_id] = project_data
@@ -2316,7 +2330,8 @@ def analyze_area():
         }
 
         # Attach measurements if previously saved for this area
-        area_measurements = session.get('measurements', {}).get(area_name)
+        room_key = current_room.get('room_key') or current_room.get('type')
+        area_measurements = session.get('measurements', {}).get(_measurement_key(room_key, area_name))
         if area_measurements:
             area_data['measurements'] = area_measurements
 
@@ -2417,8 +2432,12 @@ def area_chat():
         if result['guardrail_triggered']:
             # Per the guardrail requirement: don't store the offending
             # message as context — keep the transcript as it was before
-            # this turn, just append Natasha's guardrail reply.
-            chat_state['messages'].append({'role': 'assistant', 'text': result['reply']})
+            # this turn, just append Natasha's guardrail reply. The
+            # 'guardrail' flag lets a later deep resume restore the same
+            # visual flagging IntentionQuestionScreen already gives these
+            # bubbles live (m.guardrail && styles.bubbleGuardrail) — without
+            # it, a resumed conversation looked identical to a normal one.
+            chat_state['messages'].append({'role': 'assistant', 'text': result['reply'], 'guardrail': True})
         else:
             if user_message:
                 chat_state['messages'].append({'role': 'user', 'text': user_message})
@@ -2615,6 +2634,10 @@ def save_area_measurements():
         session_id = data.get('session_id')
         area_name = data.get('area_name')
         room_type = data.get('room_type')
+        # Stable key, distinct from room_type (a display label) — see
+        # _measurement_key. Falls back to room_type for an older client
+        # that doesn't send it yet, same pattern as room_key elsewhere.
+        room_key = data.get('room_key') or room_type
         unit = data.get('unit', 'in')
         shelf_profiles = data.get('shelf_profiles', [])
         skipped = data.get('skipped', False)
@@ -2666,8 +2689,9 @@ def save_area_measurements():
         if 'measurements' not in session:
             session['measurements'] = {}
 
-        session['measurements'][area_name] = {
+        session['measurements'][_measurement_key(room_key, area_name)] = {
             'area_name': area_name,
+            'room_key': room_key,
             'room_type': room_type,
             'unit': unit,
             'shelf_profiles': shelf_profiles,
@@ -2749,7 +2773,8 @@ def get_recommendations():
         # Look up any measurements saved earlier for this specific area (Task 1
         # fix: this used to never be read here, so measurements only ever
         # showed up in the final PDF, never in the actual recommendation text).
-        area_measurement = session.get('measurements', {}).get(current_area['name'])
+        room_key = current_room.get('room_key') or current_room.get('type')
+        area_measurement = session.get('measurements', {}).get(_measurement_key(room_key, current_area['name']))
         
         # Generate recommendations
         recommendations, error = generate_area_recommendations(

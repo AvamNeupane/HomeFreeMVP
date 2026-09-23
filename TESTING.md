@@ -48,8 +48,11 @@ Not a one-time record — re-run the relevant section whenever you touch that ar
 - [ ] Exactly one room in progress → tapping the project in Projects skips Room Selection entirely.
 - [ ] Two or more rooms in progress → tapping the project shows Room Selection; tapping an in-progress room resumes it correctly.
 - [ ] Tap "Start This Room Over" on an in-progress room, then immediately try to resume the same room again → does not resume the discarded attempt.
+- [ ] Restart a room partway through (some areas already had recommendations generated), redo it, then generate the final report → no trace of the abandoned attempt's areas/recommendations anywhere in the report, shopping list, or Amazon cart.
+- [ ] Restart a room, then check the Projects tab's room-name label for this project → doesn't show the room name twice.
 - [ ] Create a custom room, leave mid-flow, force-quit the app (not just background), reopen → resumes without crashing, even though the custom room's local config is gone (generic icon is fine, a crash is not).
 - [ ] Two custom rooms with the exact same typed name in one session → both resume independently, no cross-contamination.
+- [ ] Organize two different rooms that both have an area named the same thing (e.g. "Closet" in two different rooms) → each keeps its own separate measurements; neither's recommendation mentions the other's dimensions.
 
 ### Photo upload
 - [ ] Add 3+ photos to one category → all persist, all display as thumbnails.
@@ -72,6 +75,24 @@ Not a one-time record — re-run the relevant section whenever you touch that ar
 - [ ] "Restart Session" from the sidebar → truly empty state afterward (not just a cleared nav stack) — starting fresh doesn't show stale rooms/items.
 - [ ] "Start Over" on the Final Report does the same full reset.
 - [ ] "Organize Another Room" after finishing one room → earlier room's data is untouched.
+
+### Leave-page warnings
+- [ ] Pick some photos on Photo Guidance for a brand-new room, tap Back → warning says the room won't be started at all (not "resume off the last page" — there's nothing to resume yet).
+- [ ] Same, but tap the Home tab instead of Back → same accurate warning, same behavior.
+- [ ] Rename/remove/check an item on Item Selection, tap Home tab before hitting Continue → warned that the changes will be lost (no in-screen Back button exists on this screen, so only the Home-tab path applies here).
+- [ ] Pick photos on Area Photo / Direction Photos, or type in Measure Space, then tap Back or Home → generic "resume off the last saved step" warning, and resuming later actually does land back on the right step.
+- [ ] Start typing a chat reply to Natasha (don't send it), tap Back → warning specifically mentions only the unsent draft is at risk, not the whole conversation; confirm the earlier sent messages are still there after leaving and coming back.
+- [ ] With nothing entered on any of the above screens, tap Back/Home → no warning at all, immediate navigation.
+- [ ] On Recommendations/Final Report/Room Selection/Welcome, tap Home tab → never warned (nothing to lose there).
+
+### Guest Mode
+- [ ] "Continue as Guest" on the Login screen shows the not-saved disclaimer before proceeding.
+- [ ] As a guest: liability screen shown once, then onboarding → consent → normal flow works end to end.
+- [ ] As a guest, open the Projects tab → upsell message + Sign Up button, not a crash or an empty list pretending to be real.
+- [ ] As a guest, open the sidebar → shows "Guest Session" (not a blank/undefined email) and a "Sign Up to Save Your Work" button instead of Log Out.
+- [ ] Tap that button → confirms first, then lands back on the Login screen with local state cleared.
+- [ ] Force-quit the app mid-guest-session and reopen → back at Login (no stored guest session to resume — this is the expected, disclosed behavior, not a bug).
+- [ ] Log in with a real account after using guest mode → normal authed flow, no leftover guest state bleeding through (tab bar, sidebar, Projects tab all show the real account's data).
 
 ### Release
 - [ ] Fresh EAS build installs and opens via TestFlight without a captcha-config error.

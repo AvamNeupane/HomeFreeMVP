@@ -103,7 +103,12 @@ export default function WelcomeScreen({ goToScreen, appData, resetAppData }) {
           ) : (
             <Button
               title="Get Started"
-              onPress={() => goToScreen('roomSelection')}
+              // A genuinely fresh start (never true for "Continue
+              // Organizing" above, which is always resuming something) —
+              // name the project before picking a room, so any later
+              // "Continue Your Project?" prompt can actually say what
+              // this project is instead of just listing its rooms.
+              onPress={() => goToScreen('projectName')}
               variant="primary"
             />
           )}

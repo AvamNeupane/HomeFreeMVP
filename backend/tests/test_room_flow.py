@@ -164,7 +164,7 @@ class TestFullRoomFlowPersistence:
         # 5) Measurements — skipped, still must be recorded (this is the
         # signal computeRoomResumeTarget uses to know this step is behind us).
         res = sqlite_client.post('/area/measurements', json={
-            'session_id': session_id, 'area_name': 'Closet', 'room_type': 'Bedroom',
+            'session_id': session_id, 'area_name': 'Closet', 'room_type': 'Bedroom', 'room_key': 'bedroom',
             'unit': 'in', 'shelf_profiles': [], 'skipped': True,
         })
         assert res.status_code == 200, res.get_json()
@@ -197,7 +197,7 @@ class TestFullRoomFlowPersistence:
         assert area['user_intention'] == 'Declutter and make it easy to use daily.'
         assert area['products'] == []
 
-        assert project['measurements']['Closet']['skipped'] is True
+        assert project['measurements']['bedroom||Closet']['skipped'] is True
 
         chat_state = project['chat']['Closet']
         # Turn 1 (opening, no user_message yet) appends only the assistant's
@@ -315,3 +315,80 @@ class TestChatJsonRetry:
         assert res.status_code == 500
         assert 'Unterminated' not in body['error']
         assert 'try sending your message again' in body['error']
+
+
+class TestMeasurementRoomKeyCollision:
+    """Regression guard: measurements used to be keyed by area_name alone,
+    so a 'Closet' in one room and a 'Closet' in a different room would
+    silently overwrite each other's saved measurements."""
+
+    def test_same_area_name_in_two_different_rooms_does_not_collide(self, sqlite_client, mock_gemini):
+        session_id = _create_session(sqlite_client)
+
+        mock_gemini.queue(json.dumps([{'name': 'Closet', 'confidence': 90, 'reason': 'x'}]))
+        _detect_items(sqlite_client, session_id, room_type='Bedroom', room_key='bedroom')
+
+        mock_gemini.queue(json.dumps([{'name': 'Closet', 'confidence': 85, 'reason': 'y'}]))
+        _detect_items(sqlite_client, session_id, room_type='Guest Room', room_key='guest_room')
+
+        res = sqlite_client.post('/area/measurements', json={
+            'session_id': session_id, 'area_name': 'Closet', 'room_type': 'Bedroom', 'room_key': 'bedroom',
+            'unit': 'in', 'shelf_profiles': [{'count': 3, 'length': 20}], 'skipped': False,
+        })
+        assert res.status_code == 200, res.get_json()
+
+        res = sqlite_client.post('/area/measurements', json={
+            'session_id': session_id, 'area_name': 'Closet', 'room_type': 'Guest Room', 'room_key': 'guest_room',
+            'unit': 'in', 'shelf_profiles': [{'count': 5, 'length': 40}], 'skipped': False,
+        })
+        assert res.status_code == 200, res.get_json()
+
+        project = _get_project(sqlite_client, session_id)
+        measurements = project['measurements']
+        assert measurements['bedroom||Closet']['shelf_profiles'][0]['count'] == 3
+        assert measurements['guest_room||Closet']['shelf_profiles'][0]['count'] == 5
+
+    def test_recommendations_pick_up_the_correct_rooms_measurement(self, sqlite_client, mock_gemini):
+        session_id = _create_session(sqlite_client)
+
+        mock_gemini.queue(json.dumps([{'name': 'Closet', 'confidence': 90, 'reason': 'x'}]))
+        _detect_items(sqlite_client, session_id, room_type='Bedroom', room_key='bedroom')
+        mock_gemini.queue(json.dumps([{'name': 'Closet', 'confidence': 85, 'reason': 'y'}]))
+        _detect_items(sqlite_client, session_id, room_type='Guest Room', room_key='guest_room')
+
+        # Only the guest room's Closet gets a real measurement saved.
+        sqlite_client.post('/area/measurements', json={
+            'session_id': session_id, 'area_name': 'Closet', 'room_type': 'Guest Room', 'room_key': 'guest_room',
+            'unit': 'in', 'shelf_profiles': [{'count': 5, 'length': 40}], 'skipped': False,
+        })
+
+        # /area/recommendations requires an area entry to already exist for
+        # the most recent room — the bedroom needs its Closet analyzed
+        # first (the guest room, being the LAST detected room, is what
+        # session['rooms'][-1] refers to otherwise).
+        mock_gemini.queue(json.dumps([{'name': 'Closet', 'confidence': 90, 'reason': 'x'}]))
+        _detect_items(sqlite_client, session_id, room_type='Bedroom', room_key='bedroom')
+        mock_gemini.queue(json.dumps({'question': 'Goal?', 'context': 'A bedroom closet.', 'additional_angles': []}))
+        _analyze_area(sqlite_client, session_id, area_name='Closet', room_type='Bedroom')
+
+        # Bedroom's Closet never had measurements saved for it — its
+        # recommendation request must NOT pick up the guest room's numbers.
+        mock_gemini.queue('Group items by category on the bedroom closet shelves. ' * 2)
+        mock_gemini.queue('[]')
+        res = sqlite_client.post('/area/recommendations', json={
+            'session_id': session_id, 'user_intention': 'Declutter the bedroom closet.',
+        })
+        assert res.status_code == 200, res.get_json()
+
+        # generate_area_recommendations calls generate_content, then
+        # select_matching_products calls it once more right after (the
+        # '[]' response queued above) — the recommendation prompt is the
+        # second-to-last call recorded.
+        sent_prompt = mock_gemini.prompts[-2]
+        sent_prompt = sent_prompt[0] if isinstance(sent_prompt, list) else sent_prompt
+        assert 'No measurements were provided' in sent_prompt, (
+            'bedroom Closet has no saved measurement — the prompt should say so explicitly'
+        )
+        assert '40' not in sent_prompt, (
+            "the guest room's measurement (length 40) leaked into the bedroom's recommendation prompt"
+        )

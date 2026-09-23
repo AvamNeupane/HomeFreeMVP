@@ -62,6 +62,7 @@ export default function MeasureSpaceScreen({
   appData,
   apiBaseUrl,
   sessionId,
+  reportUnsavedWork,
 }) {
   const currentItem = appData.currentItem;
   const areaName = currentItem?.name || 'this space';
@@ -78,6 +79,28 @@ export default function MeasureSpaceScreen({
   const [parsedProfiles, setParsedProfiles] = useState([]);
   const [isScanning, setIsScanning] = useState(false);
   const [loadError, setLoadError] = useState(null);
+
+  // Neither of these is submitted until "Save & Continue" (or "Skip"),
+  // which calls /area/measurements — the area itself already exists
+  // server-side, so leaving mid-entry just re-lands here, nothing further
+  // back is lost.
+  const hasUnsavedWork = !!measurementText.trim() || parsedProfiles.length > 0;
+  const unsavedWorkMessage = 'Your current page will not be saved, and when you resume the project you will resume off the last saved step.';
+
+  useEffect(() => {
+    reportUnsavedWork?.(hasUnsavedWork, unsavedWorkMessage);
+  }, [hasUnsavedWork]);
+
+  const handleBackPress = () => {
+    if (hasUnsavedWork) {
+      Alert.alert('Are You Sure You Want to Leave This Page?', unsavedWorkMessage, [
+        { text: 'Stay', style: 'cancel' },
+        { text: 'Leave', style: 'destructive', onPress: goBack },
+      ]);
+      return;
+    }
+    goBack();
+  };
 
   useEffect(() => {
     loadMeasurementPlan();
@@ -213,7 +236,12 @@ export default function MeasureSpaceScreen({
           body: JSON.stringify({
             session_id: sessionId,
             area_name: areaName,
-            room_type: appData.currentRoom,
+            // room_type here is the display label (consistent with every
+            // other call site) — room_key is the separate stable field the
+            // backend actually keys measurements by, to avoid two
+            // different rooms' same-named areas overwriting each other.
+            room_type: appData.currentRoomLabel || appData.currentRoom,
+            room_key: appData.currentRoom,
             unit,
             shelf_profiles: profiles,
             skipped,
@@ -430,7 +458,7 @@ export default function MeasureSpaceScreen({
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        <BackButton onPress={goBack} visible={canGoBack} />
+        <BackButton onPress={handleBackPress} visible={canGoBack} />
         <AccuracyBadge appData={appData} />
 
         {phase === 'loading' && renderLoading('Looking at your photos...')}
@@ -454,7 +482,10 @@ export default function MeasureSpaceScreen({
           ) : (
             <>
               {phase === 'confirm-count' && (
-                <Button title="That's Right — Continue" onPress={() => confirmCountAndProceed(parseInt(countInput, 10) || 1)} />
+                <>
+                  <Button title="That's Right — Continue" onPress={() => confirmCountAndProceed(parseInt(countInput, 10) || 1)} />
+                  <Button title="Skip for Now" onPress={handleSkip} variant="outline" />
+                </>
               )}
 
               {phase === 'uncertain' && (
@@ -466,7 +497,10 @@ export default function MeasureSpaceScreen({
               )}
 
               {phase === 'manual-count' && (
-                <Button title="Continue" onPress={() => confirmCountAndProceed(parseInt(countInput, 10) || 1)} />
+                <>
+                  <Button title="Continue" onPress={() => confirmCountAndProceed(parseInt(countInput, 10) || 1)} />
+                  <Button title="Skip for Now" onPress={handleSkip} variant="outline" />
+                </>
               )}
 
               {phase === 'intro' && (
@@ -478,7 +512,10 @@ export default function MeasureSpaceScreen({
               )}
 
               {phase === 'input' && (
-                <Button title="Continue" onPress={handleParse} disabled={!measurementText.trim()} />
+                <>
+                  <Button title="Continue" onPress={handleParse} disabled={!measurementText.trim()} />
+                  <Button title="Skip for Now" onPress={handleSkip} variant="outline" />
+                </>
               )}
 
               {phase === 'confirm' && (

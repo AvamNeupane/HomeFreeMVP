@@ -41,13 +41,35 @@ export default function IntentionQuestionScreen({
   updateData,
   appData,
   apiBaseUrl,
-  sessionId
+  sessionId,
+  reportUnsavedWork
 }) {
   const currentContext = appData.currentContext;
   const currentItem = appData.currentItem;
 
   const [chatMessages, setChatMessages] = useState([]); // {role: 'natasha'|'user', text}
   const [userInput, setUserInput] = useState('');
+
+  // Every SENT message is already saved server-side after each turn — only
+  // an in-progress, unsent draft is actually at risk here, unlike every
+  // other screen in this flow where the whole step is unsubmitted.
+  const hasUnsavedWork = !!userInput.trim();
+  const unsavedWorkMessage = "Your conversation so far is saved — only what you're currently typing will be lost.";
+
+  useEffect(() => {
+    reportUnsavedWork?.(hasUnsavedWork, unsavedWorkMessage);
+  }, [hasUnsavedWork]);
+
+  const handleBackPress = () => {
+    if (hasUnsavedWork) {
+      Alert.alert('Leave Without Sending This Message?', unsavedWorkMessage, [
+        { text: 'Stay', style: 'cancel' },
+        { text: 'Leave', style: 'destructive', onPress: goBack },
+      ]);
+      return;
+    }
+    goBack();
+  };
   const [isStarting, setIsStarting] = useState(true);
   const [isSending, setIsSending] = useState(false);
   const [pathOptions, setPathOptions] = useState([]);
@@ -222,7 +244,7 @@ export default function IntentionQuestionScreen({
   return (
     <SafeAreaView style={styles.container}>
       <View style={[styles.keyboardView, { paddingBottom: keyboardHeight }]}>
-        <BackButton onPress={goBack} visible={canGoBack} style={styles.backButton} />
+        <BackButton onPress={handleBackPress} visible={canGoBack} style={styles.backButton} />
 
         <View style={styles.header}>
           <Icon name="chat" size={40} color={Colors.icon} style={styles.emoji} />

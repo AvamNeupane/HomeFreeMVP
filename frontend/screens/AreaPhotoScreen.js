@@ -29,7 +29,7 @@
  * area.
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { StyleSheet, Text, View, SafeAreaView, ScrollView, Alert, ActivityIndicator, TextInput, TouchableOpacity, Image, KeyboardAvoidingView, Platform } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import Colors from '../constants/Colors';
@@ -51,7 +51,8 @@ export default function AreaPhotoScreen({
   updateData,
   appData,
   apiBaseUrl,
-  sessionId
+  sessionId,
+  reportUnsavedWork
 }) {
   const currentItem = appData.currentItem;
   const currentRoomType = appData.currentRoom;
@@ -72,6 +73,28 @@ export default function AreaPhotoScreen({
   const [extraPhotos, setExtraPhotos] = useState([]); // {uri, description}
   const [pendingExtraUri, setPendingExtraUri] = useState(null);
   const [pendingExtraDescription, setPendingExtraDescription] = useState('');
+
+  // The room and this item both already exist server-side (detection
+  // already ran) — nothing here is submitted until "Continue" (/area/
+  // analyze), so leaving mid-upload just means re-taking these specific
+  // photos, not losing the room or the item.
+  const hasUnsavedWork = Object.values(photos).some((arr) => arr && arr.length > 0) || extraPhotos.length > 0;
+  const unsavedWorkMessage = 'Your current page will not be saved, and when you resume the project you will resume off the last saved step.';
+
+  useEffect(() => {
+    reportUnsavedWork?.(hasUnsavedWork, unsavedWorkMessage);
+  }, [hasUnsavedWork]);
+
+  const handleBackPress = () => {
+    if (hasUnsavedWork) {
+      Alert.alert('Are You Sure You Want to Leave This Page?', unsavedWorkMessage, [
+        { text: 'Stay', style: 'cancel' },
+        { text: 'Leave', style: 'destructive', onPress: goBack },
+      ]);
+      return;
+    }
+    goBack();
+  };
 
   const requestPermissions = async () => {
     try {
@@ -267,7 +290,7 @@ export default function AreaPhotoScreen({
         keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
       >
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        <BackButton onPress={goBack} visible={canGoBack} />
+        <BackButton onPress={handleBackPress} visible={canGoBack} />
 
         <View style={styles.header}>
           <Text style={styles.title}>{currentItem.name}</Text>

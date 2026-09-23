@@ -69,12 +69,14 @@ class FakeGeminiModel:
 
     def __init__(self):
         self._responses = []
+        self.prompts = []  # every prompt/content this was called with, in order
 
     def queue(self, text):
         self._responses.append(text)
         return self
 
-    def generate_content(self, *_args, **_kwargs):
+    def generate_content(self, content, *_args, **_kwargs):
+        self.prompts.append(content)
         if not self._responses:
             raise AssertionError(
                 'FakeGeminiModel.generate_content() called with no canned '

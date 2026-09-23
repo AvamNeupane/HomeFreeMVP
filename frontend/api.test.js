@@ -81,7 +81,7 @@ describe('computeRoomResumeTarget', () => {
         items, selected_items: selectedItems,
         areas: [{ name: 'Closet', context: 'ctx' }],
       })],
-      measurements: { Closet: { skipped: true } },
+      measurements: { 'bedroom||Closet': { skipped: true } },
       chat: {},
     };
     const target = computeRoomResumeTarget(project, 'bedroom');
@@ -97,7 +97,7 @@ describe('computeRoomResumeTarget', () => {
         items, selected_items: selectedItems,
         areas: [{ name: 'Closet', context: 'ctx' }],
       })],
-      measurements: { Closet: { skipped: true } },
+      measurements: { 'bedroom||Closet': { skipped: true } },
       chat: {
         Closet: {
           messages: [
@@ -111,10 +111,32 @@ describe('computeRoomResumeTarget', () => {
     const target = computeRoomResumeTarget(project, 'bedroom');
     expect(target.screen).toBe('intentionQuestion');
     expect(target.resumeChat.messages).toEqual([
-      { role: 'natasha', text: 'What is your goal?' },
-      { role: 'user', text: 'Declutter it.' },
+      { role: 'natasha', text: 'What is your goal?', guardrail: false },
+      { role: 'user', text: 'Declutter it.', guardrail: false },
     ]);
     expect(target.resumeChat.pathOptions).toEqual([]);
+  });
+
+  test('a stored guardrail message keeps its flag through a resume', () => {
+    const items = [{ name: 'Closet' }];
+    const selectedItems = [{ name: 'Closet' }];
+    const project = {
+      rooms: [baseRoom({
+        items, selected_items: selectedItems,
+        areas: [{ name: 'Closet', context: 'ctx' }],
+      })],
+      measurements: { 'bedroom||Closet': { skipped: true } },
+      chat: {
+        Closet: {
+          messages: [{ role: 'assistant', text: "Let's keep this about your closet.", guardrail: true }],
+          path_options: [],
+        },
+      },
+    };
+    const target = computeRoomResumeTarget(project, 'bedroom');
+    expect(target.resumeChat.messages).toEqual([
+      { role: 'natasha', text: "Let's keep this about your closet.", guardrail: true },
+    ]);
   });
 
   test('chat done (path_options present) but no direction chosen yet → intentionQuestion with pathOptions restored', () => {
@@ -126,7 +148,7 @@ describe('computeRoomResumeTarget', () => {
         items, selected_items: selectedItems,
         areas: [{ name: 'Closet', context: 'ctx' }],  // no chat_path yet
       })],
-      measurements: { Closet: { skipped: true } },
+      measurements: { 'bedroom||Closet': { skipped: true } },
       chat: { Closet: { messages: [{ role: 'assistant', text: 'Pick a direction.' }], path_options: pathOptions } },
     };
     const target = computeRoomResumeTarget(project, 'bedroom');
@@ -146,7 +168,7 @@ describe('computeRoomResumeTarget', () => {
           follow_up_photo_guidance: [{ label: 'messiest_spot', title: 'Messiest Spot' }],
         }],
       })],
-      measurements: { Closet: { skipped: true } },
+      measurements: { 'bedroom||Closet': { skipped: true } },
       chat: { Closet: { messages: [], path_options: [{ key: 'mess_cleanup' }] } },
     };
     const target = computeRoomResumeTarget(project, 'bedroom');
@@ -168,7 +190,7 @@ describe('computeRoomResumeTarget', () => {
           user_intention: 'Declutter it.',
         }],
       })],
-      measurements: { Closet: { skipped: true } },
+      measurements: { 'bedroom||Closet': { skipped: true } },
       chat: { Closet: { messages: [], path_options: [{ key: 'mess_cleanup' }] } },
     };
     const target = computeRoomResumeTarget(project, 'bedroom');
@@ -192,13 +214,30 @@ describe('computeRoomResumeTarget', () => {
           { name: 'Dresser', context: 'ctx2' },  // not done yet
         ],
       })],
-      measurements: { Closet: { skipped: true }, Dresser: { skipped: true } },
+      measurements: { 'bedroom||Closet': { skipped: true }, 'bedroom||Dresser': { skipped: true } },
       chat: { Dresser: { messages: [], path_options: [] } },
     };
     const target = computeRoomResumeTarget(project, 'bedroom');
     expect(target.currentItemIndex).toBe(1);
     expect(target.currentItem).toEqual({ name: 'Dresser' });
     expect(target.screen).toBe('intentionQuestion');
+  });
+
+  test('two different rooms with a same-named area do not collide on measurements', () => {
+    // The bug this guards against: measurements used to be keyed by area
+    // name alone, so a "Closet" in one room and a "Closet" in a different
+    // room would silently overwrite each other's saved measurements.
+    const items = [{ name: 'Closet' }];
+    const selectedItems = [{ name: 'Closet' }];
+    const bedroomProject = {
+      rooms: [baseRoom({ room_key: 'bedroom', items, selected_items: selectedItems, areas: [{ name: 'Closet', context: 'bedroom closet' }] })],
+      measurements: { 'guest_room||Closet': { skipped: false, shelf_profiles: [{ count: 3, length: 20 }] } },
+    };
+    // Only the guest_room's measurement exists — the bedroom's own Closet
+    // measurement was never saved, so resuming the bedroom's Closet must
+    // NOT pick up the guest room's data; it should still land on measureSpace.
+    const target = computeRoomResumeTarget(bedroomProject, 'bedroom');
+    expect(target.screen).toBe('measureSpace');
   });
 
   test('multiple rooms of the same room_key: picks the most recent in_progress entry', () => {

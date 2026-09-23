@@ -14,7 +14,7 @@
  * angles" paths converge here.
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { StyleSheet, Text, View, SafeAreaView, ScrollView, Alert, ActivityIndicator } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import Colors from '../constants/Colors';
@@ -33,11 +33,34 @@ export default function DirectionPhotosScreen({
   appData,
   apiBaseUrl,
   sessionId,
+  reportUnsavedWork,
 }) {
   const currentItem = appData.currentItem;
   const guidance = appData.followUpPhotoGuidance || [];
   const [photos, setPhotos] = useState({});
   const [isProcessing, setIsProcessing] = useState(false);
+
+  // These optional follow-up photos aren't submitted until Continue/Skip
+  // (which calls /area/analyze + /area/recommendations) — the item's
+  // direction is already confirmed and saved server-side, so leaving here
+  // just re-lands on this same step, ready to retake them.
+  const hasUnsavedWork = Object.keys(photos).length > 0;
+  const unsavedWorkMessage = 'Your current page will not be saved, and when you resume the project you will resume off the last saved step.';
+
+  useEffect(() => {
+    reportUnsavedWork?.(hasUnsavedWork, unsavedWorkMessage);
+  }, [hasUnsavedWork]);
+
+  const handleBackPress = () => {
+    if (hasUnsavedWork) {
+      Alert.alert('Are You Sure You Want to Leave This Page?', unsavedWorkMessage, [
+        { text: 'Stay', style: 'cancel' },
+        { text: 'Leave', style: 'destructive', onPress: goBack },
+      ]);
+      return;
+    }
+    goBack();
+  };
 
   const requestPermissions = async () => {
     const cameraPermission = await ImagePicker.requestCameraPermissionsAsync();
@@ -160,7 +183,7 @@ export default function DirectionPhotosScreen({
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        <BackButton onPress={goBack} visible={canGoBack} />
+        <BackButton onPress={handleBackPress} visible={canGoBack} />
 
         <View style={styles.header}>
           <Icon name="target" size={44} color={Colors.icon} style={styles.emoji} />

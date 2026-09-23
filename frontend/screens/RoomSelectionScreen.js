@@ -17,7 +17,7 @@ import Fonts from '../constants/Fonts';
 import Button from '../components/Button';
 import BackButton from '../components/BackButton';
 import { ROOM_TYPES, buildCustomRoomConfig } from '../constants/RoomConfig';
-import { updateRoomStatus, fetchProjectDetail, computeRoomResumeTarget } from '../api';
+import { discardRoom, fetchProjectDetail, computeRoomResumeTarget } from '../api';
 import Icon from '../components/Icon';
 
 // Turns a user-typed room name into a stable, unique room key — slugified
@@ -133,9 +133,11 @@ export default function RoomSelectionScreen({ goToScreen, goBack, canGoBack, upd
       currentItemIndex: 0,
       currentItem: null,
     });
-    // Awaited (unlike the status update elsewhere) so a resume of this
-    // same room later can't race the GET and still see 'in_progress'.
-    await updateRoomStatus(apiBaseUrl, sessionId, roomKey, 'discarded');
+    // Actually removes the old room record (not just flags it) so its
+    // areas/recommendations can never leak into the final report or
+    // shopping list — see discardRoom's own comment. Awaited so a resume
+    // of this same room key right after can't race the GET.
+    await discardRoom(apiBaseUrl, sessionId, roomKey);
     goToScreen('photoGuidance');
   };
 

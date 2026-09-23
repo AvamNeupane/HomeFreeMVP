@@ -31,7 +31,7 @@ function timeAgo(isoString) {
   return new Date(isoString).toLocaleDateString();
 }
 
-export default function ProjectsScreen({ apiBaseUrl, onOpenProject, onStartNewProject }) {
+export default function ProjectsScreen({ apiBaseUrl, onOpenProject, onStartNewProject, isGuestMode, onGoToSignup }) {
   const [projects, setProjects] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -57,8 +57,15 @@ export default function ProjectsScreen({ apiBaseUrl, onOpenProject, onStartNewPr
   }, [apiBaseUrl]);
 
   useEffect(() => {
+    // A guest has no account for /projects to list anything against — that
+    // call would just fail or come back empty, so skip it entirely and
+    // show the upsell instead (see the guest branch in the render below).
+    if (isGuestMode) {
+      setIsLoading(false);
+      return;
+    }
     loadProjects();
-  }, [loadProjects]);
+  }, [loadProjects, isGuestMode]);
 
   const projectLabel = (project) => {
     if (project.project_name) return project.project_name;
@@ -88,29 +95,43 @@ export default function ProjectsScreen({ apiBaseUrl, onOpenProject, onStartNewPr
           />
         )}
 
-        {isLoading && (
-          <View style={styles.centerBox}>
-            <ActivityIndicator size="large" color={Colors.primary} />
-          </View>
-        )}
-
-        {!isLoading && error && (
-          <View style={styles.centerBox}>
-            <Text style={styles.errorText}>Couldn't load your projects: {error}</Text>
-            <TouchableOpacity onPress={() => loadProjects()} style={styles.retryLink}>
-              <Text style={styles.retryLinkText}>Try Again</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {!isLoading && !error && projects.length === 0 && (
+        {isGuestMode ? (
           <View style={styles.centerBox}>
             <Icon name="folder" size={56} color={Colors.icon} style={styles.emptyEmoji} />
-            <Text style={styles.emptyText}>No projects yet — start organizing a room from the Home tab.</Text>
+            <Text style={styles.emptyText}>
+              Sign up to save and resume your projects — as a guest, your work isn't saved once you leave the app.
+            </Text>
+            {onGoToSignup && (
+              <Button title="Sign Up" onPress={onGoToSignup} style={styles.signupUpsellButton} />
+            )}
           </View>
+        ) : (
+          <>
+            {isLoading && (
+              <View style={styles.centerBox}>
+                <ActivityIndicator size="large" color={Colors.primary} />
+              </View>
+            )}
+
+            {!isLoading && error && (
+              <View style={styles.centerBox}>
+                <Text style={styles.errorText}>Couldn't load your projects: {error}</Text>
+                <TouchableOpacity onPress={() => loadProjects()} style={styles.retryLink}>
+                  <Text style={styles.retryLinkText}>Try Again</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {!isLoading && !error && projects.length === 0 && (
+              <View style={styles.centerBox}>
+                <Icon name="folder" size={56} color={Colors.icon} style={styles.emptyEmoji} />
+                <Text style={styles.emptyText}>No projects yet — start organizing a room from the Home tab.</Text>
+              </View>
+            )}
+          </>
         )}
 
-        {!isLoading && projects.map((project) => (
+        {!isGuestMode && !isLoading && projects.map((project) => (
           <TouchableOpacity
             key={project.id}
             style={styles.projectCard}
@@ -146,6 +167,7 @@ const styles = StyleSheet.create({
   retryLinkText: { fontSize: 14, fontFamily: Fonts.bodySemiBold, color: Colors.primary },
   emptyEmoji: { fontSize: 48, marginBottom: 12 },
   emptyText: { fontSize: 14, fontFamily: Fonts.bodyRegular, color: Colors.textSecondary, textAlign: 'center', paddingHorizontal: 20, lineHeight: 20 },
+  signupUpsellButton: { marginTop: 20, minWidth: 160 },
   projectCard: {
     flexDirection: 'row',
     alignItems: 'center',

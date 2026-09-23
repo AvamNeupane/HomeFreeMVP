@@ -106,7 +106,10 @@ export default function FinalReportScreen({
   const [isDownloading, setIsDownloading] = useState(false);
   const [allProducts, setAllProducts] = useState([]);
   const [isSaving, setIsSaving] = useState(false);
-  const [projectName, setProjectName] = useState('');
+  // Pre-filled if the project was already named at the start of the flow
+  // (ProjectNameScreen) — this field just lets them confirm/change it,
+  // not necessarily type it from scratch a second time.
+  const [projectName, setProjectName] = useState(appData.projectName || '');
   const [emailAddress, setEmailAddress] = useState(authUser?.email || '');
   const [isEmailing, setIsEmailing] = useState(false);
   // CHANGED (resume stat bug): the stat strip used to be computed purely
@@ -130,8 +133,18 @@ export default function FinalReportScreen({
       const data = await response.json();
       if (response.ok && data.success && data.project) {
         const rooms = data.project.rooms || [];
-        const areaCount = rooms.reduce((sum, room) => sum + (room.areas || []).length, 0);
-        setProjectStats({ roomCount: rooms.length, areaCount });
+        // "Start This Room Over" appends a fresh room entry rather than
+        // editing the discarded one (see RoomSelectionScreen.js), so a
+        // project can have multiple entries for the same room — keep only
+        // the most recent per room and drop discarded attempts entirely,
+        // otherwise an abandoned retry inflates these counts.
+        const latestByKey = new Map();
+        rooms.forEach((room) => {
+          latestByKey.set(room.room_key || room.type, room);
+        });
+        const activeRooms = [...latestByKey.values()].filter((r) => r.status !== 'discarded');
+        const areaCount = activeRooms.reduce((sum, room) => sum + (room.areas || []).length, 0);
+        setProjectStats({ roomCount: activeRooms.length, areaCount });
       }
     } catch (error) {
       console.error('❌ Failed to load project stats:', error);
@@ -249,7 +262,7 @@ export default function FinalReportScreen({
 
       Alert.alert(
         'Project Saved',
-        `Your plan is saved. Project code:\n\n${sessionId}\n\nKeep this code to reference or resume this project later.`,
+        'Your plan is saved — you can find it anytime under the Projects tab.',
         [{ text: 'OK' }]
       );
     } catch (error) {

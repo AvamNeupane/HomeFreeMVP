@@ -19,7 +19,7 @@
  * EXPO_PUBLIC_API_BASE_URL at your computer's LAN IP, done.
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { StyleSheet, View, StatusBar, Alert, Platform, ActivityIndicator, TouchableOpacity, Text, SafeAreaView } from 'react-native';
 import { useFonts, LibreBaskerville_400Regular, LibreBaskerville_700Bold } from '@expo-google-fonts/libre-baskerville';
 import { Montserrat_400Regular, Montserrat_600SemiBold, Montserrat_700Bold } from '@expo-google-fonts/montserrat';
@@ -39,6 +39,7 @@ import OnboardingScreen from './screens/OnboardingScreen';
 import LiabilityScreen from './screens/LiabilityScreen';
 import ConsentScreen from './screens/ConsentScreen';
 import WelcomeScreen from './screens/WelcomeScreen';
+import ProjectNameScreen from './screens/ProjectNameScreen';
 import RoomSelectionScreen from './screens/RoomSelectionScreen';
 import PhotoGuidanceScreen from './screens/PhotoGuidanceScreen';
 import ItemSelectionScreen from './screens/ItemSelectionScreen';
@@ -109,9 +110,30 @@ export default function App() {
   // goBack() can pop off the most recent one. The very first screen never
   // gets a working Back button since there's nothing behind it.
   const [screenHistory, setScreenHistory] = useState([]);
+  // The currently-active screen's latest self-reported "do I have
+  // unsubmitted work right now" state (photos taken but not uploaded, a
+  // measurement typed but not saved, etc.) — a ref, not state, since it
+  // changes on every keystroke/photo-pick and only ever needs to be read
+  // at the moment of a Home-tab tap, not re-rendered on. The message is
+  // screen-specific (what's actually lost differs a lot — see each
+  // screen's own reportUnsavedWork call) rather than one generic sentence,
+  // since e.g. a brand-new room with no server-side record yet has nothing
+  // to "resume" back to, unlike a screen mid-step on an already-started
+  // one. Reset at the start of every navigation so a screen that doesn't
+  // track this (most of them) can't inherit a stale `true` left behind by
+  // whatever screen was open before it.
+  const hasUnsavedWorkRef = useRef({ hasUnsavedWork: false, message: '' });
+  const reportUnsavedWork = (hasUnsavedWork, message = '') => {
+    hasUnsavedWorkRef.current = { hasUnsavedWork, message };
+  };
   const [sessionId, setSessionId] = useState(null);
   const [authToken, setAuthToken] = useState(null);
   const [authUser, setAuthUser] = useState(null);
+  // Guest Mode: an anonymous project with no account behind it (see
+  // continueAsGuest below) — nothing is resumable later, by design; the
+  // user is told this up front on the Login screen and again via the
+  // sidebar's "Sign Up to Save Your Work" prompt instead of a real logout.
+  const [isGuestMode, setIsGuestMode] = useState(false);
   // Only two tabs, by design: the active in-progress flow ("home") and the
   // list of past/current projects ("projects"). No other persistent nav.
   const [activeTab, setActiveTab] = useState('home');
@@ -127,6 +149,12 @@ export default function App() {
   // definitions silently drifting apart over time.
   const initialAppData = {
     consentGiven: false,
+    // Set by ProjectNameScreen, asked right at the start of a fresh flow,
+    // before Room Selection — so "Continue Your Project?" and the
+    // Projects tab can identify this project by what the user actually
+    // called it instead of just its room list. null if skipped (falls
+    // back to the room-list label everywhere that already handled that).
+    projectName: null,
     selectedRooms: [],
     // { [roomType]: 'in_progress' | 'completed' | 'discarded' }. Populated
     // from the backend's per-room status (see /room/detect-items and
@@ -240,6 +268,7 @@ export default function App() {
     setApiAuthToken(null);
     setAuthToken(null);
     setAuthUser(null);
+    setIsGuestMode(false);
     setSessionId(null);
     setScreenHistory([]);
     setCurrentScreen('login');
@@ -292,9 +321,16 @@ export default function App() {
       const incomplete = projects.find((p) => !p.has_report);
 
       if (incomplete) {
+        // Prefer the name the user gave this project (see
+        // ProjectNameScreen, asked right at the start of the flow,
+        // before room selection) over the room list — a real name is
+        // what actually tells them which project this is when there's
+        // more than one in progress, not just what rooms happen to be in it.
+        const projectLabel = incomplete.project_name
+          || (incomplete.rooms.length ? incomplete.rooms.join(', ') : null);
         Alert.alert(
           'Continue Your Project?',
-          `You have an in-progress plan${incomplete.rooms.length ? ` (${incomplete.rooms.join(', ')})` : ''}. Continue where you left off, or start a new one?`,
+          `You have an in-progress plan${projectLabel ? ` (${projectLabel})` : ''}. Continue where you left off, or start a new one?`,
           [
             { text: 'Start New', onPress: () => startFreshSession(token, isNewSignup) },
             { text: 'Continue', onPress: () => resumeProject(incomplete) },
@@ -315,6 +351,14 @@ export default function App() {
    * the auth flow initializeAfterAuth was interrupted from.
    */
   const handleAcceptLiability = async () => {
+    if (isGuestMode) {
+      // Guests have no account to record acceptance against — shown once
+      // for this app session only (same as Consent already is), nothing
+      // persisted server-side. Routes through onboarding, same as a new
+      // signup, since a guest hasn't seen any of this before either.
+      goToScreen('onboarding', { resetHistory: true });
+      return;
+    }
     if (!pendingAuthContext) return;
     const { token, user, isNewSignup } = pendingAuthContext;
     try {
@@ -440,6 +484,43 @@ export default function App() {
     }
   };
 
+  /**
+   * Login screen's "Continue as Guest" — an anonymous project with no
+   * account behind it. /session/create treats a request with no
+   * Authorization header as a guest session (see its docstring); nothing
+   * about this is resumable later (no login to find it again with), which
+   * is exactly what the Login screen's disclaimer and the sidebar's "Sign
+   * Up to Save Your Work" prompt exist to make clear.
+   */
+  const continueAsGuest = async () => {
+    setConnectionStatus('checking');
+    try {
+      const response = await axios.post(`${API_BASE_URL}/session/create`, {}, {
+        timeout: SESSION_CREATE_TIMEOUT,
+      });
+      if (!response.data || !response.data.success) {
+        throw new Error('Invalid response from server');
+      }
+      setSessionId(response.data.session_id);
+      setIsGuestMode(true);
+      setConnectionStatus('connected');
+      // A guest has no account to gate liability acceptance on — shown
+      // once for this session regardless (see handleAcceptLiability).
+      goToScreen('liability', { resetHistory: true });
+    } catch (error) {
+      console.error('❌ Guest session creation failed:', error);
+      setConnectionStatus('error');
+      Alert.alert(
+        'Connection Error',
+        `Failed to start a guest session.\n\n${error.response?.data?.error || error.message}`,
+        [
+          { text: 'Retry', onPress: () => continueAsGuest() },
+          { text: 'Cancel', style: 'cancel' },
+        ]
+      );
+    }
+  };
+
   // Screen navigation functions.
   // CHANGED (bug fix): these used to be declared AFTER the fontsLoaded
   // early-return checks below. That's fine for functions only ever called
@@ -501,6 +582,13 @@ export default function App() {
    */
   const goToScreen = (screen, opts = {}) => {
     console.log('🔄 Navigating to:', screen);
+    // Whatever the outgoing screen last reported doesn't apply to
+    // wherever we're headed — the destination's own effect (if it tracks
+    // this at all) will set it back to true if there's actually something
+    // at risk there. Without this, a screen with no tracking of its own
+    // (most of them) would silently inherit a stale `true` from whatever
+    // was open before it.
+    hasUnsavedWorkRef.current = { hasUnsavedWork: false, message: '' };
     if (opts.resetHistory) {
       setScreenHistory([]);
     } else {
@@ -514,17 +602,43 @@ export default function App() {
    * no history (e.g. already on the very first screen).
    */
   const goBack = () => {
-    setScreenHistory(prev => {
-      if (prev.length === 0) return prev;
-      const next = [...prev];
-      const previousScreen = next.pop();
-      console.log('↩️  Going back to:', previousScreen);
-      setCurrentScreen(previousScreen);
-      return next;
-    });
+    if (screenHistory.length === 0) return;
+    hasUnsavedWorkRef.current = { hasUnsavedWork: false, message: '' };
+    const next = [...screenHistory];
+    const previousScreen = next.pop();
+    console.log('↩️  Going back to:', previousScreen);
+    setScreenHistory(next);
+    setCurrentScreen(previousScreen);
   };
 
   const canGoBack = screenHistory.length > 0;
+
+  /**
+   * Home tab tap — always navigates to Welcome (see the goToScreen call
+   * below), but first checks whatever the current screen most recently
+   * reported via reportUnsavedWork. If there's genuinely nothing at risk
+   * (most screens, most of the time) this is instant and silent, same as
+   * before this feature existed.
+   */
+  const handleHomeTabPress = () => {
+    const proceed = () => {
+      setActiveTab('home');
+      goToScreen('welcome', { resetHistory: true });
+    };
+    const { hasUnsavedWork, message } = hasUnsavedWorkRef.current;
+    if (hasUnsavedWork) {
+      Alert.alert(
+        'Are You Sure You Want to Leave This Page?',
+        message,
+        [
+          { text: 'Stay', style: 'cancel' },
+          { text: 'Leave', style: 'destructive', onPress: proceed },
+        ]
+      );
+      return;
+    }
+    proceed();
+  };
 
   // Handle font loading errors
   if (fontsError) {
@@ -551,7 +665,9 @@ export default function App() {
       canGoBack,
       connectionStatus,
       authUser,
+      isGuestMode,
       onLogout: handleLogout,
+      reportUnsavedWork,
     };
 
     switch (currentScreen) {
@@ -562,7 +678,7 @@ export default function App() {
           </View>
         );
       case 'login':
-        return <LoginScreen {...sharedProps} onAuthenticated={handleAuthenticated} />;
+        return <LoginScreen {...sharedProps} onAuthenticated={handleAuthenticated} onContinueAsGuest={continueAsGuest} />;
       case 'signup':
         return <SignupScreen {...sharedProps} onAuthenticated={handleAuthenticated} />;
       case 'liability':
@@ -573,6 +689,8 @@ export default function App() {
         return <ConsentScreen {...sharedProps} />;
       case 'welcome':
         return <WelcomeScreen {...sharedProps} />;
+      case 'projectName':
+        return <ProjectNameScreen {...sharedProps} />;
       case 'roomSelection':
         return <RoomSelectionScreen {...sharedProps} />;
       case 'photoGuidance':
@@ -615,7 +733,7 @@ export default function App() {
   // consent) here means the tab bar simply isn't reachable at all until
   // its gate is cleared, which is the same protection 'liability' and
   // 'onboarding' already had.
-  const showTabBar = authUser && !['authLoading', 'login', 'signup', 'onboarding', 'liability', 'consent'].includes(currentScreen);
+  const showTabBar = (authUser || isGuestMode) && !['authLoading', 'login', 'signup', 'onboarding', 'liability', 'consent'].includes(currentScreen);
 
   return (
     <View style={styles.container}>
@@ -625,17 +743,7 @@ export default function App() {
           <View style={styles.tabBar}>
             <TouchableOpacity
               style={[styles.tabItem, activeTab === 'home' && styles.tabItemActive]}
-              onPress={() => {
-                // CHANGED (Home tab redesign): tapping Home used to just
-                // flip `activeTab` back to 'home', which showed whatever
-                // `currentScreen` already was — e.g. still deep in a
-                // bedroom's photo step, with no way to tell this button
-                // was even supposed to take you anywhere. It now actually
-                // navigates to the Welcome/Home screen every time, which
-                // itself offers Continue vs. Start a New Project.
-                setActiveTab('home');
-                goToScreen('welcome', { resetHistory: true });
-              }}
+              onPress={handleHomeTabPress}
             >
               <Icon name="home" size={16} color={activeTab === 'home' ? Colors.accent : Colors.textLight} style={styles.tabIcon} />
               <Text style={[styles.tabText, activeTab === 'home' && styles.tabTextActive]}>Home</Text>
@@ -652,7 +760,7 @@ export default function App() {
               onPress={() => setSidebarVisible(true)}
               accessibilityLabel="Profile and settings"
             >
-              <Text style={styles.profileButtonText}>{(authUser?.email || '?').charAt(0).toUpperCase()}</Text>
+              <Text style={styles.profileButtonText}>{authUser?.email ? authUser.email.charAt(0).toUpperCase() : 'G'}</Text>
             </TouchableOpacity>
           </View>
         </SafeAreaView>
@@ -662,6 +770,8 @@ export default function App() {
           apiBaseUrl={API_BASE_URL}
           onOpenProject={onOpenProject}
           onStartNewProject={() => { setActiveTab('home'); resetAppData(); }}
+          isGuestMode={isGuestMode}
+          onGoToSignup={() => { setActiveTab('home'); goToScreen('signup', { resetHistory: true }); }}
         />
       ) : (
         renderScreen()
@@ -670,7 +780,9 @@ export default function App() {
         visible={sidebarVisible}
         onClose={() => setSidebarVisible(false)}
         authUser={authUser}
+        isGuestMode={isGuestMode}
         onLogout={handleLogout}
+        onGoHome={handleHomeTabPress}
       />
     </View>
   );

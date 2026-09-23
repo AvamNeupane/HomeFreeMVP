@@ -72,18 +72,29 @@ const deriveInitialItems = (appData) => {
   }));
 };
 
-export default function ItemSelectionScreen({ goToScreen, updateData, appData, apiBaseUrl, sessionId }) {
+export default function ItemSelectionScreen({ goToScreen, updateData, appData, apiBaseUrl, sessionId, reportUnsavedWork }) {
   const [items, setItems] = useState(() => deriveInitialItems(appData));
   const [editingId, setEditingId] = useState(null);
   const [editValue, setEditValue] = useState('');
   const [newAreaName, setNewAreaName] = useState('');
   const [isVerifying, setIsVerifying] = useState(false);
+  // Flips true the moment the user renames/removes/checks/adds anything —
+  // none of it is saved server-side until "Continue" (saveSelectedItems),
+  // so leaving before that reverts to the original AI-detected list.
+  const [hasEdited, setHasEdited] = useState(false);
 
   // Persist every change so a Photo Guidance round-trip (for a failed
   // verification) doesn't lose renames/removes/other custom adds made here.
   useEffect(() => {
     updateData({ workingItems: items });
   }, [items]);
+
+  useEffect(() => {
+    reportUnsavedWork?.(
+      hasEdited,
+      'Your changes to this list will be lost, and you’ll see the original detected areas when you come back.'
+    );
+  }, [hasEdited]);
 
   // Returning from Photo Guidance after an "Add More Photos" retry.
   useEffect(() => {
@@ -126,10 +137,12 @@ export default function ItemSelectionScreen({ goToScreen, updateData, appData, a
 
   const toggleIncluded = (id) => {
     setItems((prev) => prev.map((item) => (item.id === id ? { ...item, included: !item.included } : item)));
+    setHasEdited(true);
   };
 
   const removeItem = (id) => {
     setItems((prev) => prev.filter((item) => item.id !== id));
+    setHasEdited(true);
   };
 
   const startEditing = (item) => {
@@ -145,9 +158,11 @@ export default function ItemSelectionScreen({ goToScreen, updateData, appData, a
     setItems((prev) => prev.map((item) => (item.id === editingId ? { ...item, name: editValue.trim() } : item)));
     setEditingId(null);
     setEditValue('');
+    setHasEdited(true);
   };
 
   const verifyAgainstPhotos = async (id, name) => {
+    setHasEdited(true);
     const roomPhotos = appData.roomPhotos || {};
     // roomPhotos is keyed by category -> array of uris (a category can hold
     // more than one photo now), so this needs flattening before it's a

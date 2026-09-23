@@ -38,6 +38,7 @@ import BackButton from '../components/BackButton';
 import AccuracyBadge from '../components/AccuracyBadge';
 import ProductCard from '../components/ProductCard';
 import { updateRoomStatus } from '../api';
+import { ROOM_TYPES } from '../constants/RoomConfig';
 
 export default function RecommendationsScreen({
   goToScreen,
@@ -57,6 +58,16 @@ export default function RecommendationsScreen({
 
   const hasMoreItems = currentItemIndex < sessionItems.length - 1;
   const hasMoreRooms = currentRoomIndex < selectedRooms.length - 1;
+
+  // Resolves a room key (built-in or custom) to its human-readable name,
+  // the same way RoomSelectionScreen's roomNameFor does — needed here to
+  // name the room(s) in button copy and confirmation dialogs.
+  const roomLabelFor = (key) => {
+    if (!key) return '';
+    return (ROOM_TYPES[key] || (appData.customRoomConfigs || {})[key] || {}).name || key;
+  };
+  const currentRoomLabel = appData.currentRoomLabel || roomLabelFor(currentRoom);
+  const nextRoomLabel = roomLabelFor(selectedRooms[currentRoomIndex + 1]);
 
   // Flip the current room's status to 'completed' the moment there are no
   // more selected items left to review for it — this is the room-selection
@@ -132,19 +143,33 @@ export default function RecommendationsScreen({
     goToScreen('photoGuidance');
   };
 
-  // NEW: always available, not gated on hasMoreItems. Sends the user back
-  // to pick from the areas already detected in this room (or add a custom
-  // one) — a fresh round that appends onto allRecommendations rather than
-  // replacing anything already done.
-  const handleOrganizeAnotherArea = () => {
-    goToScreen('itemSelection');
-  };
-
-  // NEW: always available, not gated on hasMoreRooms. Sends the user back
-  // to room selection to add an additional room on top of the ones already
-  // organized (RoomSelectionScreen appends rather than overwrites).
+  // Always available, not gated on hasMoreRooms — sends the user back to
+  // room selection to add an additional room on top of the ones already
+  // organized (RoomSelectionScreen appends rather than overwrites). This is
+  // the fallback shown in place of "Organize Next Selected Room" once
+  // there's no next pre-selected room left to advance to.
   const handleOrganizeAnotherRoom = () => {
     goToScreen('roomSelection');
+  };
+
+  // Jumps to the next room the user already picked in Room Selection. If
+  // this room still has unorganized areas, warns first rather than silently
+  // leaving them behind — those areas stay resumable later either way
+  // (Room Selection still shows the room as "in progress"), but the user
+  // should get to choose rather than be surprised by it.
+  const handleOrganizeNextSelectedRoom = () => {
+    if (hasMoreItems) {
+      Alert.alert(
+        `You still have remaining areas in ${currentRoomLabel} to organize`,
+        '',
+        [
+          { text: `Continue organizing ${currentRoomLabel}`, style: 'cancel' },
+          { text: `Skip to ${nextRoomLabel}`, onPress: handleNextRoom },
+        ]
+      );
+      return;
+    }
+    handleNextRoom();
   };
 
   const handleFinish = () => {
@@ -233,31 +258,31 @@ export default function RecommendationsScreen({
 
       <View style={styles.footer}>
         {hasMoreItems ? (
-          <Button 
-            title="Continue to Next Area"
+          <Button
+            title={`Take Photos of Other Identified Areas in ${currentRoomLabel}`}
             onPress={handleNextArea}
           />
         ) : hasMoreRooms ? (
-          <Button 
+          <Button
             title="Continue to Next Room"
             onPress={handleNextRoom}
           />
         ) : (
-          <Button 
+          <Button
             title="Generate Final Report"
             onPress={handleFinish}
           />
         )}
 
-        <Button
-          title="Organize Another Area"
-          icon="box"
-          onPress={handleOrganizeAnotherArea}
-          variant="secondary"
-          style={styles.secondaryButton}
-        />
-
-        {!hasMoreItems && (
+        {hasMoreRooms ? (
+          <Button
+            title="Organize Next Selected Room"
+            icon="home"
+            onPress={handleOrganizeNextSelectedRoom}
+            variant="secondary"
+            style={styles.secondaryButton}
+          />
+        ) : (
           <Button
             title="Organize Another Room"
             icon="home"

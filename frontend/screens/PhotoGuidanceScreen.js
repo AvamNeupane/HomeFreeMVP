@@ -12,7 +12,7 @@
  * CHANGED (back navigation): added a Back button at the top of the screen.
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { StyleSheet, Text, View, SafeAreaView, ScrollView, Alert, ActivityIndicator, TextInput, TouchableOpacity, Image, KeyboardAvoidingView, Platform } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import Colors from '../constants/Colors';
@@ -27,14 +27,15 @@ import Icon from '../components/Icon';
 
 const MINIMUM_PHOTOS_REQUIRED = 2;
 
-export default function PhotoGuidanceScreen({ 
-  goToScreen, 
+export default function PhotoGuidanceScreen({
+  goToScreen,
   goBack,
   canGoBack,
-  updateData, 
+  updateData,
   appData,
   apiBaseUrl,
-  sessionId 
+  sessionId,
+  reportUnsavedWork,
 }) {
   const currentRoomType = appData.currentRoom;
   // Falls back to a saved custom-room config (see RoomSelectionScreen's
@@ -64,6 +65,32 @@ export default function PhotoGuidanceScreen({
   const [extraPhotos, setExtraPhotos] = useState([]); // {uri, description}
   const [pendingExtraUri, setPendingExtraUri] = useState(null);
   const [pendingExtraDescription, setPendingExtraDescription] = useState('');
+
+  // Nothing here is saved server-side until "Continue" (which calls
+  // /room/detect-items) — for the normal new-room case there's no resume
+  // point to fall back to at all yet, so the warning says so explicitly
+  // rather than implying a "last saved step" that doesn't exist. The
+  // pendingVerifyItem retry case is different: the room already exists,
+  // only this one re-verification attempt would be lost.
+  const hasUnsavedWork = Object.values(photos).some((arr) => arr && arr.length > 0) || extraPhotos.length > 0;
+  const unsavedWorkMessage = pendingVerifyItem
+    ? "These photos haven't been submitted yet — leaving now means losing them, and you'll need to retry verifying this item when you come back."
+    : "None of these photos have been analyzed yet — if you leave now, this room won't be started, and you'll begin again from scratch.";
+
+  useEffect(() => {
+    reportUnsavedWork?.(hasUnsavedWork, unsavedWorkMessage);
+  }, [hasUnsavedWork]);
+
+  const handleBackPress = () => {
+    if (hasUnsavedWork) {
+      Alert.alert('Are You Sure You Want to Leave This Page?', unsavedWorkMessage, [
+        { text: 'Stay', style: 'cancel' },
+        { text: 'Leave', style: 'destructive', onPress: goBack },
+      ]);
+      return;
+    }
+    goBack();
+  };
 
   const pickExtraPhoto = async (fromCamera) => {
     const hasPermission = await requestPermissions();
@@ -390,7 +417,7 @@ export default function PhotoGuidanceScreen({
         keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
       >
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        <BackButton onPress={goBack} visible={canGoBack} />
+        <BackButton onPress={handleBackPress} visible={canGoBack} />
 
         <View style={styles.header}>
           <View style={styles.roomIcon}>

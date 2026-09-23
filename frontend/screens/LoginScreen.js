@@ -25,11 +25,22 @@ import CaptchaChallenge from '../components/CaptchaChallenge';
 import Icon from '../components/Icon';
 import { fetchWithTimeout } from '../api';
 
-export default function LoginScreen({ apiBaseUrl, onAuthenticated, goToScreen }) {
+export default function LoginScreen({ apiBaseUrl, onAuthenticated, goToScreen, onContinueAsGuest }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const captchaRef = useRef(null);
+
+  const handleContinueAsGuest = () => {
+    Alert.alert(
+      'Continue as Guest?',
+      "You can use the app without an account, but your work won't be saved — if you close the app or leave, your progress is gone for good. Sign up anytime to save your projects.",
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Continue as Guest', onPress: () => onContinueAsGuest?.() },
+      ]
+    );
+  };
 
   const handleLogin = async () => {
     if (!email.trim() || !password) {
@@ -104,6 +115,10 @@ export default function LoginScreen({ apiBaseUrl, onAuthenticated, goToScreen })
               Don't have an account? <Text style={styles.switchTextBold}>Sign up</Text>
             </Text>
           </TouchableOpacity>
+
+          <TouchableOpacity onPress={handleContinueAsGuest} style={styles.guestLink}>
+            <Text style={styles.guestText}>Continue as Guest</Text>
+          </TouchableOpacity>
         </ScrollView>
       </KeyboardAvoidingView>
       <CaptchaChallenge ref={captchaRef} />
@@ -136,4 +151,6 @@ const styles = StyleSheet.create({
   switchLink: { marginTop: 24, alignItems: 'center' },
   switchText: { fontSize: 14, fontFamily: Fonts.bodyRegular, color: Colors.textSecondary },
   switchTextBold: { fontFamily: Fonts.bodySemiBold, color: Colors.primary },
+  guestLink: { marginTop: 16, alignItems: 'center' },
+  guestText: { fontSize: 13, fontFamily: Fonts.bodyRegular, color: Colors.textLight, textDecorationLine: 'underline' },
 });

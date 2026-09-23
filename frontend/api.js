@@ -74,6 +74,9 @@ export function fetchWithTimeout(url, options = {}, timeoutMs = DEFAULT_TIMEOUT_
  */
 export const roomMatchesKey = (room, roomKey) => (room.room_key || room.type) === roomKey;
 
+/** Mirrors the backend's _measurement_key (app.py) — must stay in sync. */
+const measurementKey = (roomKey, areaName) => `${roomKey || 'unknown_room'}||${areaName}`;
+
 /**
  * Flip a room's status ('in_progress' | 'completed' | 'discarded') on the
  * server. The generic PATCH /projects/:id route does a shallow merge, so
@@ -107,6 +110,43 @@ export async function updateRoomStatus(apiBaseUrl, sessionId, roomType, status) 
     });
   } catch (e) {
     console.log('⚠️  updateRoomStatus failed (non-fatal):', e.message);
+  }
+}
+
+/**
+ * "Start This Room Over" — actually removes the abandoned room's record
+ * (not just flags it) so it can never leak into the final report, shopping
+ * list, Amazon cart, or Projects list, which all aggregate across every
+ * room in the project with no filter. A deleted entry simply isn't there
+ * for any of those to see. fetchRoomStatuses/computeRoomResumeTarget
+ * already treat a room_key with no matching entry as "never started",
+ * which is exactly the right result here.
+ */
+export async function discardRoom(apiBaseUrl, sessionId, roomKey) {
+  if (!sessionId || !roomKey) return;
+  try {
+    const getRes = await apiFetch(`${apiBaseUrl}/projects/${sessionId}`);
+    const getData = await getRes.json();
+    if (!getData.success) return;
+
+    const rooms = getData.project.rooms || [];
+    let targetIndex = -1;
+    for (let i = rooms.length - 1; i >= 0; i--) {
+      if (roomMatchesKey(rooms[i], roomKey)) {
+        targetIndex = i;
+        break;
+      }
+    }
+    if (targetIndex === -1) return;
+
+    const remainingRooms = rooms.filter((_, i) => i !== targetIndex);
+    await apiFetch(`${apiBaseUrl}/projects/${sessionId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rooms: remainingRooms }),
+    });
+  } catch (e) {
+    console.log('⚠️  discardRoom failed (non-fatal):', e.message);
   }
 }
 
@@ -222,7 +262,7 @@ export function computeRoomResumeTarget(project, roomType) {
     return { screen: 'areaPhoto', ...base };
   }
 
-  const measurements = (project.measurements || {})[currentItem.name];
+  const measurements = (project.measurements || {})[measurementKey(room.room_key || room.type, currentItem.name)];
   if (!measurements) {
     return { screen: 'measureSpace', ...base, currentContext: area.context };
   }
@@ -238,6 +278,7 @@ export function computeRoomResumeTarget(project, roomType) {
         messages: ((chatState && chatState.messages) || []).map((m) => ({
           role: m.role === 'assistant' ? 'natasha' : 'user',
           text: m.text,
+          guardrail: !!m.guardrail,
         })),
         pathOptions: chatDone ? chatState.path_options : [],
       },
