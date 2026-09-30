@@ -495,8 +495,22 @@ export default function App() {
   const continueAsGuest = async () => {
     setConnectionStatus('checking');
     try {
+      // FIX ("missing or invalid auth header" when tapping Continue as
+      // Guest): checkStoredAuth() sets the stored token as a GLOBAL axios
+      // default BEFORE validating it, and deliberately keeps that header
+      // when /auth/me fails for a network reason rather than a 401 — so a
+      // stale/expired token could still be attached here. /session/create
+      // treats a *missing* header as guest but rejects a *present but
+      // invalid* one with a 401, so inheriting that leftover header failed
+      // the guest flow outright. Clear both transports explicitly rather
+      // than relying on the header happening to be absent.
+      delete axios.defaults.headers.common['Authorization'];
+      setApiAuthToken(null);
+      await AsyncStorage.removeItem(AUTH_TOKEN_KEY);
+
       const response = await axios.post(`${API_BASE_URL}/session/create`, {}, {
         timeout: SESSION_CREATE_TIMEOUT,
+        headers: { Authorization: undefined },
       });
       if (!response.data || !response.data.success) {
         throw new Error('Invalid response from server');

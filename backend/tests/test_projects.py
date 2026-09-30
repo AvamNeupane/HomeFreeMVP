@@ -95,3 +95,73 @@ class TestProjectOwnership:
 
         res = pg_client.patch(f'/projects/{project_id}', json={'project_name': 'Hijacked'}, headers=other_headers)
         assert res.status_code == 403
+
+
+class TestProjectDeletion:
+    """Hard delete, owner-scoped — see DELETE /projects/<id> in app.py."""
+
+    def test_owner_can_delete_their_own_project(self, pg_client):
+        token = _signup_and_token(pg_client, 'deleter@example.com')
+        project_id = _create_project(pg_client, token)
+        headers = {'Authorization': f'Bearer {token}'}
+
+        res = pg_client.delete(f'/projects/{project_id}', headers=headers)
+        assert res.status_code == 200, res.get_json()
+
+        # Gone for real, not flagged — it neither reads back nor lists.
+        assert pg_client.get(f'/projects/{project_id}', headers=headers).status_code == 404
+        ids = [p['id'] for p in pg_client.get('/projects', headers=headers).get_json()['projects']]
+        assert project_id not in ids
+
+    def test_a_different_user_cannot_delete_it(self, pg_client):
+        owner_token = _signup_and_token(pg_client, 'delete-owner@example.com')
+        project_id = _create_project(pg_client, owner_token)
+
+        other_token = _signup_and_token(pg_client, 'delete-thief@example.com')
+        res = pg_client.delete(f'/projects/{project_id}', headers={'Authorization': f'Bearer {other_token}'})
+        assert res.status_code == 404
+
+        # Still very much the owner's.
+        owner_headers = {'Authorization': f'Bearer {owner_token}'}
+        assert pg_client.get(f'/projects/{project_id}', headers=owner_headers).status_code == 200
+
+    def test_delete_requires_a_token(self, pg_client):
+        token = _signup_and_token(pg_client, 'anon-delete@example.com')
+        project_id = _create_project(pg_client, token)
+        assert pg_client.delete(f'/projects/{project_id}').status_code == 401
+
+
+class TestCleanupNeverDeletesOwnedProjects:
+    """
+    Regression test for a silent data-loss bug: cleanup_old_sessions() used
+    to delete EVERY project past a 1-hour TTL with no owner check, and runs
+    on every /health call — so a logged-in user's saved projects vanished
+    about an hour after they were created. Accounts exist so projects
+    persist; only anonymous guest projects may ever expire.
+    """
+
+    def test_owned_project_survives_cleanup_but_guest_project_does_not(self, pg_app, pg_client):
+        token = _signup_and_token(pg_client, 'persists@example.com')
+        owned_id = _create_project(pg_client, token)
+        guest_id = pg_client.post('/session/create').get_json()['session_id']
+
+        # TTL of 0 makes everything already-expired, so this asserts the
+        # owner check itself rather than waiting out a real clock.
+        pg_app.GUEST_SESSION_TIMEOUT = 0
+        pg_app.cleanup_old_sessions()
+
+        headers = {'Authorization': f'Bearer {token}'}
+        assert pg_client.get(f'/projects/{owned_id}', headers=headers).status_code == 200
+        assert pg_client.get(f'/projects/{guest_id}').status_code == 404
+
+    def test_health_check_does_not_wipe_saved_projects(self, pg_app, pg_client):
+        # /health calls cleanup on every request and the app hits it at
+        # startup, which is what made the original bug so destructive.
+        token = _signup_and_token(pg_client, 'health-safe@example.com')
+        project_id = _create_project(pg_client, token)
+
+        pg_app.GUEST_SESSION_TIMEOUT = 0
+        assert pg_client.get('/health').status_code == 200
+
+        headers = {'Authorization': f'Bearer {token}'}
+        assert pg_client.get(f'/projects/{project_id}', headers=headers).status_code == 200

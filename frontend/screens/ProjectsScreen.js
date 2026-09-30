@@ -10,7 +10,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { StyleSheet, Text, View, SafeAreaView, ScrollView, TouchableOpacity, ActivityIndicator, RefreshControl } from 'react-native';
+import { StyleSheet, Text, View, SafeAreaView, ScrollView, TouchableOpacity, ActivityIndicator, RefreshControl, Alert } from 'react-native';
 import Colors from '../constants/Colors';
 import Fonts from '../constants/Fonts';
 import { apiFetch } from '../api';
@@ -36,6 +36,7 @@ export default function ProjectsScreen({ apiBaseUrl, onOpenProject, onStartNewPr
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
 
   const loadProjects = useCallback(async (isRefresh = false) => {
     if (isRefresh) setIsRefreshing(true); else setIsLoading(true);
@@ -73,6 +74,42 @@ export default function ProjectsScreen({ apiBaseUrl, onOpenProject, onStartNewPr
       return project.rooms.map((r) => (r || '').replace(/_/g, ' ')).join(' + ');
     }
     return 'Untitled Project';
+  };
+
+  /**
+   * Deleting is permanent — the backend hard-deletes the row, so there's no
+   * undo and no trash to restore from. The confirm dialog says so plainly
+   * rather than asking a vague "are you sure?", and the card is removed
+   * locally on success instead of refetching the whole list.
+   */
+  const confirmDelete = (project) => {
+    Alert.alert(
+      'Delete this project?',
+      `"${projectLabel(project)}" will be permanently deleted, including its photos, measurements and report. This can't be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            setDeletingId(project.id);
+            try {
+              const response = await apiFetch(`${apiBaseUrl}/projects/${project.id}`, { method: 'DELETE' });
+              const data = await response.json();
+              if (!response.ok || !data.success) {
+                throw new Error(data.error || 'Failed to delete project');
+              }
+              setProjects((prev) => prev.filter((p) => p.id !== project.id));
+            } catch (err) {
+              console.error('❌ Delete project error:', err);
+              Alert.alert('Could not delete', err.message);
+            } finally {
+              setDeletingId(null);
+            }
+          },
+        },
+      ]
+    );
   };
 
   return (
@@ -147,6 +184,22 @@ export default function ProjectsScreen({ apiBaseUrl, onOpenProject, onStartNewPr
                 {project.has_report ? 'Report Ready' : 'In Progress'}
               </Text>
             </View>
+            <TouchableOpacity
+              onPress={() => confirmDelete(project)}
+              disabled={deletingId === project.id}
+              style={styles.deleteButton}
+              // The trash icon is small next to a full-width card, so give
+              // it a touch target that meets the 44pt minimum without
+              // widening the visible button.
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              accessibilityLabel={`Delete ${projectLabel(project)}`}
+            >
+              {deletingId === project.id ? (
+                <ActivityIndicator size="small" color={Colors.textSecondary} />
+              ) : (
+                <Icon name="trash" size={18} color={Colors.textSecondary} />
+              )}
+            </TouchableOpacity>
           </TouchableOpacity>
         ))}
       </ScrollView>
@@ -179,6 +232,7 @@ const styles = StyleSheet.create({
   projectName: { fontSize: 16, fontFamily: Fonts.bodySemiBold, color: Colors.accent, marginBottom: 4, textTransform: 'capitalize' },
   projectMeta: { fontSize: 12, fontFamily: Fonts.bodyRegular, color: Colors.textSecondary },
   statusBadge: { borderRadius: 20, paddingHorizontal: 10, paddingVertical: 5, marginLeft: 10 },
+  deleteButton: { marginLeft: 12, padding: 4, alignItems: 'center', justifyContent: 'center', width: 26 },
   statusBadgeDone: { backgroundColor: '#E4F1EA' },
   statusBadgeProgress: { backgroundColor: Colors.secondary },
   statusBadgeText: { fontSize: 11, fontFamily: Fonts.bodySemiBold },

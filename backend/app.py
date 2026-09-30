@@ -56,7 +56,11 @@ app.config['UPLOAD_FOLDER'] = 'temp_uploads'
 app.config['PDF_FOLDER'] = os.getenv('PDF_OUTPUT_FOLDER', 'pdf_reports')
 ALLOWED_EXTENSIONS = set(os.getenv('ALLOWED_EXTENSIONS', 'jpg,jpeg,png').split(','))
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
-SESSION_TIMEOUT = int(os.getenv('SESSION_TIMEOUT', 3600))
+# How long an anonymous Guest Mode project survives before cleanup removes
+# it. Only guest projects expire — account-owned projects are kept until
+# their owner deletes them (see cleanup_old_sessions). 24h rather than the
+# old 1h so backgrounding the app doesn't wipe a guest's in-progress work.
+GUEST_SESSION_TIMEOUT = int(os.getenv('GUEST_SESSION_TIMEOUT', 86400))
 JWT_SECRET = os.getenv('JWT_SECRET', 'dev-only-insecure-secret-change-me')
 DATABASE_URL = os.getenv('DATABASE_URL')
 TURNSTILE_SECRET_KEY = os.getenv('TURNSTILE_SECRET_KEY')
@@ -155,16 +159,27 @@ def get_local_ip() -> str:
 
 
 def cleanup_old_sessions():
-    """Remove expired sessions. Never lets a cleanup failure break /health."""
+    """
+    Remove expired GUEST sessions only. Never lets a cleanup failure break
+    /health.
+
+    FIX (silent data loss): this used to delete every project older than
+    SESSION_TIMEOUT — which defaults to 3600s — with no check on whether the
+    project belonged to a logged-in account. Since /health runs this on
+    every call and the app calls /health at startup, a registered user's
+    saved projects were being permanently deleted roughly an hour after
+    they were created. That's the opposite of what accounts are for.
+
+    Now an account-owned project is never auto-deleted and disappears only
+    when its owner deletes it (see DELETE /projects/<id>). Guest projects
+    are anonymous and unresumable by design, so they still expire — after
+    GUEST_SESSION_TIMEOUT, defaulting to 24h rather than 1h so that simply
+    backgrounding the app over lunch doesn't wipe a guest's work.
+    """
     try:
-        current_time = datetime.now()
-        expired = [
-            sid for sid, data in sessions.items()
-            if current_time - data.get('created_at', current_time) > timedelta(seconds=SESSION_TIMEOUT)
-        ]
-        for sid in expired:
-            del sessions[sid]
-            logger.info(f"🗑️  Cleaned up expired session: {sid}")
+        removed = sessions.delete_expired_guest_projects(GUEST_SESSION_TIMEOUT)
+        if removed:
+            logger.info(f"🗑️  Cleaned up {removed} expired guest session(s)")
     except Exception as e:
         logger.warning(f"⚠️  Session cleanup skipped due to error: {e}")
 
@@ -1923,6 +1938,31 @@ def accept_liability():
     except Exception as e:
         logger.error(f"❌ Accept liability failed: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'error': f"Failed to record acceptance: {str(e)}"}), 500
+
+
+@app.route('/projects/<project_id>', methods=['DELETE'])
+@require_auth
+def delete_my_project(project_id):
+    """
+    Permanently delete one of the caller's own projects. Hard delete — the
+    row is gone, not flagged, so there's nothing to restore afterwards.
+
+    The ownership check is enforced in SQL (`DELETE ... WHERE id = %s AND
+    user_id = %s`), not by reading the project first and comparing in
+    Python. Project ids are UUIDs but they're handed to the client, so a
+    delete keyed on id alone would let anyone holding an id destroy another
+    account's project. A project that doesn't exist and one owned by
+    somebody else both return the same 404, so this can't be used to probe
+    which project ids are real.
+    """
+    try:
+        if sessions.delete_for_user(project_id, g.user_id):
+            logger.info(f"🗑️  User {g.user_id} deleted project {project_id}")
+            return jsonify({'success': True}), 200
+        return jsonify({'success': False, 'error': 'Project not found'}), 404
+    except Exception as e:
+        logger.error(f"❌ Delete project failed: {str(e)}", exc_info=True)
+        return jsonify({'success': False, 'error': f"Delete project failed: {str(e)}"}), 500
 
 
 @app.route('/projects', methods=['GET'])

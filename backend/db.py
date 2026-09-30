@@ -232,6 +232,62 @@ class PostgresSessionStore:
         finally:
             self._put(conn)
 
+    def delete_expired_guest_projects(self, max_age_seconds: int) -> int:
+        """
+        Delete ONLY anonymous (guest) projects older than max_age_seconds,
+        returning how many were removed.
+
+        FIX (data loss): the old cleanup iterated every project via items()
+        and `del`eted anything past a 1-hour TTL — with no owner check at
+        all, so a logged-in user's saved projects were permanently destroyed
+        an hour after creation. Accounts exist precisely so projects persist;
+        an account-owned project (user_id IS NOT NULL) is now never touched
+        by cleanup and only ever disappears when the user deletes it.
+
+        Guests have no account to resume from, so their rows are the only
+        ones that would otherwise accumulate forever — those still expire.
+        """
+        conn = self._conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    DELETE FROM projects
+                    WHERE user_id IS NULL
+                      AND created_at < now() - (%s * INTERVAL '1 second')
+                    """,
+                    (max_age_seconds,),
+                )
+                deleted = cur.rowcount
+                conn.commit()
+                return deleted or 0
+        finally:
+            self._put(conn)
+
+    def delete_for_user(self, project_id: str, user_id: str) -> bool:
+        """
+        Delete a project only if it actually belongs to `user_id`. Returns
+        True if a row was deleted, False if it didn't exist or belonged to
+        someone else.
+
+        The ownership check lives in the SQL itself rather than in a
+        read-then-delete in the route: project ids are UUIDs, but they're
+        still handed to the client, and without `AND user_id = %s` anyone
+        holding an id could delete another account's project.
+        """
+        conn = self._conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM projects WHERE id = %s AND user_id = %s",
+                    (project_id, user_id),
+                )
+                deleted = cur.rowcount
+                conn.commit()
+                return bool(deleted)
+        finally:
+            self._put(conn)
+
     def get_owner(self, project_id: str) -> Optional[str]:
         conn = self._conn()
         try:

@@ -22,7 +22,7 @@ Data survives a server restart because it's written to a local SQLite file
 import json
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, Iterator, Optional, Tuple
 
 DEFAULT_DB_PATH = "roomscan.db"
@@ -130,3 +130,32 @@ class SQLiteSessionStore:
         with self._lock, self._connect() as conn:
             rows = conn.execute("SELECT id FROM projects").fetchall()
         return [r[0] for r in rows]
+
+    # -- cleanup / ownership (parity with PostgresSessionStore) --------------
+
+    def delete_expired_guest_projects(self, max_age_seconds: int) -> int:
+        """
+        Delete projects older than max_age_seconds, returning the count.
+
+        This store is the no-accounts fallback — it has no user_id column at
+        all, so every project in it is anonymous by definition and "guest
+        only" means all of them. The Postgres store, which does have
+        accounts, protects owned projects from cleanup; see its own
+        docstring for why that matters.
+        """
+        cutoff = (datetime.now() - timedelta(seconds=max_age_seconds)).isoformat()
+        with self._lock, self._connect() as conn:
+            cur = conn.execute("DELETE FROM projects WHERE created_at < ?", (cutoff,))
+            conn.commit()
+            return cur.rowcount or 0
+
+    def delete_for_user(self, project_id: str, user_id: str) -> bool:
+        """
+        Accounts don't exist in this store, so there's no ownership to check
+        — deleting by id is the most this backend can do. Present only so
+        app.py can call the same method against either store.
+        """
+        with self._lock, self._connect() as conn:
+            cur = conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+            conn.commit()
+            return bool(cur.rowcount)
