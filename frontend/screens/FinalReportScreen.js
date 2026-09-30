@@ -16,7 +16,7 @@
  * which keeps the same signature this screen already uses.
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { StyleSheet, Text, View, SafeAreaView, ScrollView, Alert, ActivityIndicator, Share, TextInput, TouchableOpacity } from 'react-native';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -104,7 +104,10 @@ export default function FinalReportScreen({
   const [pdfFilename, setPdfFilename] = useState(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
-  const [allProducts, setAllProducts] = useState([]);
+  // One entry per organized area (see GET /projects/:id/products), so the
+  // shopping list can be grouped by area and can show areas that matched
+  // nothing instead of hiding them.
+  const [productGroups, setProductGroups] = useState([]);
   const [isSaving, setIsSaving] = useState(false);
   // Pre-filled if the project was already named at the start of the flow
   // (ProjectNameScreen) — this field just lets them confirm/change it,
@@ -194,7 +197,10 @@ export default function FinalReportScreen({
       const response = await apiFetch(`${apiBaseUrl}/projects/${sessionId}/products`);
       const data = await response.json();
       if (response.ok && data.success) {
-        setAllProducts(data.products || []);
+        // `groups` is one entry per organized area, in flow order, and
+        // includes areas that matched nothing so the list can say so
+        // rather than quietly omitting them.
+        setProductGroups(data.groups || []);
       }
     } catch (error) {
       console.error('❌ Failed to load products:', error);
@@ -357,6 +363,13 @@ export default function FinalReportScreen({
   const cardSections = sections.filter((s) => !/recommended products|step 4:? add the right storage/i.test(s.heading));
   const roomCount = projectStats ? projectStats.roomCount : new Set((appData.selectedRooms || [])).size;
   const areaCount = projectStats ? projectStats.areaCount : (appData.allRecommendations || []).length;
+  // The stat strip counts distinct items to buy, not recommendation slots —
+  // the same bin suggested for three areas is still one thing in the cart.
+  const uniqueProductCount = useMemo(() => {
+    const ids = new Set();
+    productGroups.forEach((group) => (group.products || []).forEach((p) => ids.add(p.id)));
+    return ids.size;
+  }, [productGroups]);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -380,8 +393,8 @@ export default function FinalReportScreen({
           </View>
           <View style={styles.statDivider} />
           <View style={styles.statItem}>
-            <Text style={styles.statNumber}>{allProducts.length}</Text>
-            <Text style={styles.statLabel}>Item{allProducts.length === 1 ? '' : 's'}</Text>
+            <Text style={styles.statNumber}>{uniqueProductCount}</Text>
+            <Text style={styles.statLabel}>Item{uniqueProductCount === 1 ? '' : 's'}</Text>
           </View>
         </View>
 
@@ -389,14 +402,35 @@ export default function FinalReportScreen({
           <ReportSectionCard key={i} heading={section.heading} body={section.body} />
         ))}
 
-        {allProducts.length > 0 && (
+        {productGroups.length > 0 && (
           <View style={styles.productsSection}>
             <View style={styles.sectionTitleRow}>
               <Icon name="bag" size={18} color={Colors.accent} style={styles.sectionTitleIcon} />
               <Text style={styles.sectionTitle}>Shopping List</Text>
             </View>
-            {allProducts.map((product) => (
-              <ProductCard key={product.id} product={product} />
+
+            {productGroups.map((group, i) => (
+              <View key={`${group.room_key}-${group.area_name}-${i}`} style={styles.productGroup}>
+                <Text style={styles.productGroupArea}>{group.area_name}</Text>
+                <Text style={styles.productGroupRoom}>{group.room_label}</Text>
+
+                {/* Said once per area, not on every card — repeating it per
+                    product turns a useful caveat into noise. */}
+                {!group.measured && (group.products || []).length > 0 && (
+                  <Text style={styles.productGroupCaveat}>
+                    Because measurements were not given, product dimensions might not be
+                    accurate to your space's needs.
+                  </Text>
+                )}
+
+                {(group.products || []).length === 0 ? (
+                  <Text style={styles.productGroupEmpty}>No current items recommended.</Text>
+                ) : (
+                  group.products.map((product) => (
+                    <ProductCard key={`${group.area_name}-${product.id}`} product={product} />
+                  ))
+                )}
+              </View>
             ))}
           </View>
         )}
@@ -530,6 +564,38 @@ const styles = StyleSheet.create({
     paddingTop: 12,
   },
   productsSection: { marginBottom: 20 },
+  productGroup: { marginBottom: 22 },
+  productGroupArea: {
+    fontSize: 15,
+    fontFamily: Fonts.bodySemiBold,
+    color: Colors.accent,
+    marginBottom: 2,
+  },
+  productGroupRoom: {
+    fontSize: 12,
+    fontFamily: Fonts.bodyRegular,
+    color: Colors.textSecondary,
+    marginBottom: 10,
+    textTransform: 'capitalize',
+  },
+  productGroupCaveat: {
+    fontSize: 12,
+    fontFamily: Fonts.bodyRegular,
+    color: Colors.textSecondary,
+    fontStyle: 'italic',
+    lineHeight: 17,
+    marginBottom: 10,
+  },
+  productGroupEmpty: {
+    fontSize: 13,
+    fontFamily: Fonts.bodyRegular,
+    color: Colors.textLight,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    backgroundColor: Colors.cardBackground,
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
   sectionTitle: {
     fontSize: 17,
     fontFamily: Fonts.headingBold,

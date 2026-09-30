@@ -19,16 +19,42 @@ class TestFormatProductsSummary:
             }],
         }
         out = sqlite_app.format_products_summary(session_data)
-        assert '### Closet' in out
-        assert '**Stackable Bin**' in out
+        assert '#### Closet' in out
+        # Quantity is folded into the heading ("3x Name") rather than
+        # printed as its own bullet — it's the first thing worth reading.
+        assert '**3× Stackable Bin**' in out
         assert '30 × 20 × 15 cm' in out
-        assert 'Recommended quantity: 3' in out
-        assert '[Shop on Amazon](https://amazon.com/dp/example)' in out
+        assert '[View on Amazon](https://amazon.com/dp/example)' in out
 
-    def test_no_products_anywhere_shows_fallback_line(self, sqlite_app):
+    def test_an_area_that_matched_nothing_says_so(self, sqlite_app):
+        # An area with no matches is listed and labelled, not silently
+        # dropped — otherwise "nothing fits here" is indistinguishable
+        # from "we never organized this area".
         out = sqlite_app.format_products_summary({'rooms': [{'areas': [{'name': 'Closet', 'products': []}]}]})
-        assert 'No products were matched during this session.' in out
-        assert '###' not in out
+        assert '#### Closet' in out
+        assert 'No current items recommended.' in out
+
+    def test_unmeasured_area_carries_the_dimensions_caveat(self, sqlite_app):
+        session_data = {'rooms': [{'type': 'kitchen', 'room_key': 'kitchen', 'areas': [{
+            'name': 'Pantry',
+            'products': [{'name': 'Bin', 'reason': 'Keeps dry goods together.',
+                          'amazon_link': 'https://amazon.com/dp/x', 'quantity': 1}],
+        }]}], 'measurements': {}}
+        out = sqlite_app.format_products_summary(session_data)
+        assert 'measurements were not given' in out
+
+    def test_measured_area_has_no_dimensions_caveat(self, sqlite_app):
+        session_data = {'rooms': [{'type': 'kitchen', 'room_key': 'kitchen', 'areas': [{
+            'name': 'Pantry',
+            'products': [{'name': 'Bin', 'reason': 'Keeps dry goods together.',
+                          'amazon_link': 'https://amazon.com/dp/x', 'quantity': 1}],
+        }]}], 'measurements': {
+            sqlite_app._measurement_key('kitchen', 'Pantry'): {
+                'unit': 'cm', 'shelf_profiles': [{'length': 90, 'width': 30, 'height': 40}],
+            },
+        }}
+        out = sqlite_app.format_products_summary(session_data)
+        assert 'measurements were not given' not in out
 
     def test_omits_dimensions_line_for_a_no_fixed_size_product(self, sqlite_app):
         session_data = {'rooms': [{'areas': [{'name': 'Closet', 'products': [{

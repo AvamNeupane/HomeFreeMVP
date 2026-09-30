@@ -30,7 +30,12 @@ from PIL import Image
 from session_store import SQLiteSessionStore
 from db import PostgresSessionStore, validate_email, validate_password
 from natasha_voice import voice_for_tier, CHAT_SYSTEM_PROMPT_TEMPLATE
-from products import build_candidate_context, build_product_entry
+from products import (
+    build_candidate_context,
+    build_product_entry,
+    candidates_for,
+    suggested_quantity,
+)
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
@@ -1235,38 +1240,77 @@ def generate_area_recommendations(
         return None, f"Recommendation error: {str(e)}"
 
 
+def _fallback_product_entries(candidates: List[Dict], limit: int) -> List[Dict]:
+    """
+    Deterministic result used when the AI rerank can't run or can't be
+    parsed. The candidates are already room-suitable and already known to
+    fit, so the top-scoring few are a defensible answer — much better than
+    the old behaviour, where any Gemini hiccup silently produced an empty
+    shopping list that looked identical to "nothing was relevant".
+
+    Only used when there's a real fit signal to stand on: without one,
+    ranking is driven by loose keyword matches and staying quiet is more
+    honest than guessing.
+    """
+    entries = []
+    for candidate in candidates[:limit]:
+        if not candidate.get('fit_checked'):
+            continue
+        product = candidate['product']
+        entry = build_product_entry(
+            product['id'],
+            f"Fits the space you measured for this area.",
+            suggested_quantity(candidate),
+        )
+        if entry:
+            entries.append(entry)
+    return entries
+
+
 def select_matching_products(
     area_name: str,
     room_type: str,
     user_intention: str,
     recommendation_text: str,
     measurement: Optional[Dict],
+    room_key: Optional[str] = None,
     limit: int = 4,
 ) -> Tuple[List[Dict], Optional[str]]:
     """
-    Single semantic pass over the FULL product catalog — replaces the old
-    two-stage pipeline (dimensional-bucket pre-filter, then a relevance
-    filter on the survivors). The old bucket system only had 3 real
-    categories (kitchen/bathroom/closet, with everything else defaulting to
-    "closet"), which can't represent a real ~50-item catalog spanning
-    spice organizers, cable management, craft supplies, etc. Instead, the
-    AI sees every catalog product at once (with real dims or an
-    adjustable/no-fixed-size note — see products.py), plus this specific
-    area's actual plan and the user's own stated goal, and picks what
-    genuinely belongs — dimensional fit and topical relevance in one
-    judgment instead of two disconnected passes.
+    Two stages: a deterministic filter in Python, then an AI rerank over
+    whatever survived.
 
-    Returning an empty list is a valid, correct outcome — never force a
-    pick just to have something to show. Fails to an empty list (not a
-    fallback catalog dump) on any error, since there's no longer a
-    separate dimensional-only stage to fall back to.
+    This used to be a single pass in which the ENTIRE catalog was pasted
+    into the prompt with "[does NOT fit the measured space]" appended to
+    the products that didn't fit, and the model was asked not to pick
+    those. That made dimensional correctness a prompt-following request
+    rather than a guarantee, so nothing actually prevented a 161cm
+    over-door rack being recommended for a 30cm cabinet, or velvet hangers
+    for a kitchen.
+
+    Now `candidates_for` (products.py) removes anything that doesn't suit
+    the room or doesn't physically fit, and the model only ever sees
+    products that are already valid choices. Its remaining job — judging
+    which of several valid options genuinely matches this user's plan, and
+    writing the one-line reason — is the part it's actually good at.
+
+    Quantity is computed from the measurement rather than taken from the
+    model: how many fit is arithmetic, capped per product so a shelf that
+    technically holds 20 jars doesn't produce a 20x recommendation.
+
+    An empty list is a valid, correct outcome when nothing is genuinely
+    relevant; the caller renders "No current items recommended".
     """
+    candidates = candidates_for(room_key or room_type, area_name, measurement)
+    if not candidates:
+        return [], None
+
     try:
         model = initialize_gemini()
         if not model:
-            return [], None
+            return _fallback_product_entries(candidates, limit), None
 
-        candidate_context = build_candidate_context(measurement)
+        candidate_context = build_candidate_context(candidates)
         prompt = f"""
         A user is organizing "{area_name}" in their {room_type.replace('_', ' ')}.
 
@@ -1275,36 +1319,32 @@ def select_matching_products(
         The plan generated for them:
         {recommendation_text}
 
-        Below is the full approved product catalog. Each line shows a
-        product's real dimensions, or a note if it has no fixed size
-        (adjustable, accessory, or soft-sided item). Lines are marked
-        whether they physically fit the user's measured space, if one was
-        taken.
+        Below are the approved products that are ALREADY confirmed to suit
+        this room and to physically fit this user's space where a
+        measurement was taken. Every option here is valid — your job is
+        only to judge which ones genuinely match the plan above.
 
         {candidate_context}
 
-        Pick UP TO {limit} products that genuinely belong in THIS specific
-        plan for THIS specific user — being marked as fitting is not
-        enough on its own, it still has to make sense for the actual plan
-        and goal above. Never pick a product explicitly marked as NOT
-        fitting. Returning an empty list is correct if nothing here is
-        genuinely relevant — don't pick something just to have something
-        to recommend.
+        Pick UP TO {limit} that genuinely belong in THIS specific plan for
+        THIS specific user. Fitting is not a reason on its own — the
+        product still has to serve the actual plan and goal. Returning an
+        empty list is correct if nothing here is genuinely relevant; don't
+        pick something just to have something to recommend.
 
-        For each pick, write a short (one sentence) reason grounded in
-        this specific user's plan/goal — not a generic description of the
-        product — and a sensible quantity (default 1; only suggest more
-        than 1 when buying several of the same item genuinely makes sense,
-        e.g. matching jars for multiple shelves).
+        For each pick write a short one-sentence reason grounded in this
+        user's own plan and goal — not a generic description of the
+        product. Do not mention quantities; those are calculated
+        separately from the user's measurements.
 
         Return ONLY a JSON array, e.g.:
-        [{{"id": "spice-jars", "reason": "...", "quantity": 6}}]
+        [{{"id": "spice-jars", "reason": "..."}}]
         Return [] if nothing is relevant.
         """
 
-        response = model.generate_content(prompt, generation_config=GENCONFIG_SHORT)
+        response = model.generate_content(prompt, generation_config=GENCONFIG_MEDIUM)
         if not response or not response.text:
-            return [], None
+            return _fallback_product_entries(candidates, limit), None
 
         text = response.text.strip()
         if text.startswith('```'):
@@ -1315,18 +1355,29 @@ def select_matching_products(
 
         picks = json.loads(text.strip())
         if not isinstance(picks, list):
-            return [], None
+            return _fallback_product_entries(candidates, limit), None
 
+        by_id = {c['product']['id']: c for c in candidates}
         entries = []
         for pick in picks[:limit]:
-            entry = build_product_entry(pick.get('id'), pick.get('reason', ''), pick.get('quantity', 1))
+            candidate = by_id.get(pick.get('id'))
+            if not candidate:
+                # The model named something that was filtered out (or made
+                # one up) — drop it rather than reintroducing a product
+                # that failed the fit/room checks.
+                continue
+            entry = build_product_entry(
+                pick.get('id'),
+                pick.get('reason', ''),
+                suggested_quantity(candidate),
+            )
             if entry:
                 entries.append(entry)
         return entries, None
 
     except Exception as e:
-        logger.warning(f"⚠️  Product matching failed, returning no products: {str(e)}")
-        return [], None
+        logger.warning(f"⚠️  Product rerank failed, falling back to filtered candidates: {str(e)}")
+        return _fallback_product_entries(candidates, limit), None
 
 
 def format_measurements_summary(session_data: Dict) -> str:
@@ -1376,32 +1427,59 @@ def format_products_summary(session_data: Dict) -> str:
     """
     lines = ["## Step 4: Add the Right Storage\n"]
     lines.append(
-        "Based on the measurements you entered, we've selected storage "
-        "solutions designed to work with your available space.\n\n"
+        "Storage picked to work with the spaces you organized in this "
+        "project.\n\n"
     )
-    found_any = False
+
+    measurements = session_data.get('measurements', {})
+    any_area_at_all = False
 
     for room in session_data.get('rooms', []):
-        for area in room.get('areas', []):
+        room_key = room.get('room_key') or room.get('type')
+        room_label = (room.get('type') or 'Room').replace('_', ' ').title()
+
+        areas = room.get('areas', []) or []
+        if not areas:
+            continue
+
+        lines.append(f"### {room_label}\n")
+        for area in areas:
+            any_area_at_all = True
+            area_name = area.get('name', 'Area')
+            lines.append(f"#### {area_name}\n")
+
             products = area.get('products') or []
             if not products:
+                # An area with nothing suitable is a real outcome, not a
+                # gap to hide — the old version skipped the area entirely,
+                # which made "nothing fits here" indistinguishable from
+                # "we never got to this area".
+                lines.append("No current items recommended.\n\n")
                 continue
-            found_any = True
-            lines.append(f"### {area.get('name', 'Area')}\n")
+
+            # Said once per area rather than per product: repeating it on
+            # every card turns a useful caveat into noise.
+            measurement = measurements.get(_measurement_key(room_key, area_name))
+            if not measurement or measurement.get('skipped'):
+                lines.append(
+                    "*Because measurements were not given, product "
+                    "dimensions might not be accurate to your space's "
+                    "needs.*\n\n"
+                )
+
             for p in products:
-                lines.append(f"**{p['name']}**\n\n")
+                quantity = p.get('quantity') or 1
+                heading = f"{quantity}× {p['name']}" if quantity > 1 else p['name']
+                lines.append(f"**{heading}**\n\n")
                 dims = p.get('dims_cm')
-                if dims and len(dims) == 3:
+                if dims and len(dims) == 3 and all(d is not None for d in dims):
                     lines.append(f"- Dimensions: {dims[0]:g} × {dims[1]:g} × {dims[2]:g} cm (L × W × H)\n")
-                quantity = p.get('quantity')
-                if quantity:
-                    lines.append(f"- Recommended quantity: {quantity}\n")
                 lines.append(f"- Why we recommend it: {p['reason']}\n")
-                lines.append(f"- [Shop on Amazon]({p['amazon_link']})\n\n")
+                lines.append(f"- [View on Amazon]({p['amazon_link']})\n\n")
             lines.append("\n")
 
-    if not found_any:
-        lines.append("No products were matched during this session.\n")
+    if not any_area_at_all:
+        lines.append("No current items recommended.\n")
 
     lines.append(
         "\n*Always confirm the current product dimensions before "
@@ -2840,17 +2918,18 @@ def get_recommendations():
                 'error': error
             }), 500
         
-        # One semantic pass over the full catalog — picks products that are
-        # BOTH dimensionally sensible (where a measurement exists) AND
-        # actually relevant to this specific plan/goal, instead of a rigid
-        # room-type bucket followed by a separate relevance check. An empty
-        # result is correct, not a failure — see select_matching_products.
+        # Deterministic room/fit filter, then an AI rerank over what's left
+        # — so a product that doesn't suit this room or doesn't fit the
+        # measured space can't be recommended at all, rather than merely
+        # being labelled and hoped against. An empty result is correct, not
+        # a failure — see select_matching_products.
         products, _ = select_matching_products(
             current_area['name'],
             current_room['type'],
             user_intention,
             recommendations,
             area_measurement,
+            room_key=current_room.get('room_key') or current_room.get('type'),
             limit=4,
         )
 
@@ -2881,9 +2960,17 @@ def get_recommendations():
 @app.route('/projects/<project_id>/products', methods=['GET'])
 def get_project_products(project_id):
     """
-    Aggregate every matched product across all areas/rooms in this project,
-    deduped by product id. Powers "Add All to Amazon Cart" and any
-    whole-project product view on the frontend.
+    Every matched product in this project, grouped by room and area.
+
+    `groups` is what the shopping list renders: one entry per organized
+    area, in flow order, including areas that matched nothing so the UI can
+    say "No current items recommended" instead of quietly omitting them.
+    Each group reports whether that area was actually measured, so the
+    frontend can show the dimensions caveat once per area.
+
+    `products` stays a flat id-deduped list for whole-project uses (the
+    combined Amazon links), where the same bin suggested for three areas
+    should only be bought once.
     """
     try:
         if project_id not in sessions:
@@ -2893,10 +2980,25 @@ def get_project_products(project_id):
             }), 404
 
         session = sessions[project_id]
+        measurements = session.get('measurements', {})
+        groups = []
         seen = {}
+
         for room in session.get('rooms', []):
-            for area in room.get('areas', []):
-                for p in area.get('products') or []:
+            room_key = room.get('room_key') or room.get('type')
+            room_label = (room.get('type') or 'Room').replace('_', ' ').title()
+            for area in room.get('areas', []) or []:
+                area_name = area.get('name', 'Area')
+                products = area.get('products') or []
+                measurement = measurements.get(_measurement_key(room_key, area_name))
+                groups.append({
+                    'room_key': room_key,
+                    'room_label': room_label,
+                    'area_name': area_name,
+                    'measured': bool(measurement and not measurement.get('skipped')),
+                    'products': products,
+                })
+                for p in products:
                     seen[p['id']] = p
 
         products = list(seen.values())
@@ -2904,6 +3006,7 @@ def get_project_products(project_id):
 
         return jsonify({
             'success': True,
+            'groups': groups,
             'products': products,
             'amazon_links': links
         }), 200
