@@ -3,8 +3,8 @@
  *
  * CHANGED (direction selection): the chat used to silently infer a single
  * "path" and jump straight to recommendations once done. It now shows the
- * 1-3 directions Natasha proposes (e.g. "Mess Cleanup" / "Style Refresh" /
- * "Both") as tappable choices — the user picks, nothing is auto-decided
+ * 1-3 directions Natasha proposes (e.g. "Declutter First" / "Better
+ * Systems" / "Both") as tappable choices — the user picks, nothing is auto-decided
  * for them. Picking a direction hands off to DirectionPhotosScreen for a
  * couple of targeted follow-up photos before the recommendation is
  * generated.

@@ -725,12 +725,12 @@ def generate_direction_photo_guidance(
     chat_transcript: str,
 ) -> Tuple[List[Dict], Optional[str]]:
     """
-    After the user picks a direction (e.g. "Mess Cleanup" vs. "Style
-    Refresh") at the end of the Natasha chat, ask Gemini for 2-3 SPECIFIC
+    After the user picks a direction (e.g. "Declutter First" vs. "Better
+    Systems") at the end of the Natasha chat, ask Gemini for 2-3 SPECIFIC
     follow-up photo angles suited to that direction, so the user is guided
     to capture what's actually relevant before the final recommendation is
-    generated (e.g. mess cleanup -> the cluttered spot itself; style
-    refresh -> a wide shot showing colors/materials).
+    generated (e.g. decluttering -> the most overloaded spot itself;
+    systems -> the shelves and containers things would live in).
 
     Returns (guidance_list, error). Non-fatal — an empty list on error is a
     valid fallback for the caller (the extra photos are optional).
@@ -749,9 +749,14 @@ def generate_direction_photo_guidance(
 
         Suggest 2-3 SPECIFIC photo angles that would help you give a
         precise, useful recommendation for THIS direction. Be concrete
-        about what to capture and why (e.g. for a mess-cleanup direction,
-        ask for a close-up of the messiest spot; for a style direction,
-        ask for a wide shot that shows the whole color/material palette).
+        about what to capture and why (e.g. for a decluttering direction,
+        ask for a close-up of the most overloaded spot; for a systems
+        direction, ask for a shot of the shelves, drawers or containers
+        things would be stored in).
+
+        This is an organizing app, not an interior design one — only ask
+        for photos that help with decluttering and storage. Never ask for
+        photos of decor, artwork, paint colours, or a room's overall look.
 
         Return ONLY a JSON array:
         [
@@ -1130,16 +1135,18 @@ def _format_measurement_block(measurement: Optional[Dict]) -> str:
     return '\n'.join(lines)
 
 
-def _format_priorities_block(priorities: Optional[List[str]], visual_style: Optional[str]) -> str:
-    """Turn user-selected organization priorities / visual style into a prompt block."""
-    parts = []
-    if priorities:
-        parts.append(f"Organization priorities (in the user's own words/order): {', '.join(priorities)}")
-    if visual_style:
-        parts.append(f"Preferred visual style: {visual_style}")
-    if not parts:
-        return "No specific organization priorities or visual style were selected — balance general best practices."
-    return '\n'.join(parts)
+def _format_priorities_block(priorities: Optional[List[str]]) -> str:
+    """
+    Turn user-selected organization priorities into a prompt block.
+
+    Used to also carry a `visual_style` ("White", "Modern", "Wood"...) that
+    was injected into both the per-area and final-report prompts as
+    "Preferred visual style: X". That's interior design, not organizing, so
+    it's gone along with the picker that fed it.
+    """
+    if not priorities:
+        return "No specific organization priorities were selected — balance general best practices."
+    return f"Organization priorities (in the user's own words/order): {', '.join(priorities)}"
 
 
 def generate_area_recommendations(
@@ -1150,7 +1157,6 @@ def generate_area_recommendations(
     photo_labels: List[str],
     measurement: Optional[Dict] = None,
     priorities: Optional[List[str]] = None,
-    visual_style: Optional[str] = None,
     tier: str = 'paid',
     path: Optional[str] = None,
 ) -> Tuple[Optional[str], Optional[str]]:
@@ -1158,7 +1164,7 @@ def generate_area_recommendations(
     Generate specific recommendations based on user's stated intention.
 
     `measurement` is the saved shelf-profile record for this area (or None),
-    and `priorities`/`visual_style` are the user's selections from the
+    and `priorities` are the user's selections from the
     organization-priorities step. Both are folded into the prompt so the
     recommendation is actually personalized by what the user provided,
     instead of only appearing later in the final PDF summary.
@@ -1181,7 +1187,7 @@ def generate_area_recommendations(
                 pass
 
         measurement_block = _format_measurement_block(measurement)
-        priorities_block = _format_priorities_block(priorities, visual_style)
+        priorities_block = _format_priorities_block(priorities)
         voice_block = voice_for_tier(tier)
         path_block = f"\nThe user's need for this area was identified as: {path}.\n" if path else ""
 
@@ -1577,8 +1583,7 @@ def generate_final_report(session_data: Dict) -> Tuple[Optional[str], Optional[s
             return None, "No room summaries available to generate report"
 
         priorities_summary = _format_priorities_block(
-            session_data.get('organization_priorities'),
-            session_data.get('visual_style')
+            session_data.get('organization_priorities')
         )
         voice_block = voice_for_tier(session_data.get('user_tier', 'paid'))
 
@@ -1596,7 +1601,7 @@ def generate_final_report(session_data: Dict) -> Tuple[Optional[str], Optional[s
         prompt = f"""
         {voice_block}
 
-        The user's stated organization priorities / visual style for this project:
+        The user's stated organization priorities for this project:
         {priorities_summary}
 
         You are creating a final home organization report. Be concise — this
@@ -2479,10 +2484,15 @@ def analyze_area():
         }), 500
 
 
+# Fallback directions offered when the chat doesn't produce its own.
+# These used to be Mess Cleanup / Style Refresh / Both — two of the three
+# were decorating, which is out of scope for an organizing product. The
+# real fork in organizing is how much leaves the space versus how well
+# what stays is systemized.
 DEFAULT_PATH_OPTIONS = [
-    {'key': 'declutter', 'label': 'Mess Cleanup', 'description': 'Focus on decluttering and organizing what you have.'},
-    {'key': 'restyle', 'label': 'Style Refresh', 'description': 'Focus on making the space look better.'},
-    {'key': 'mixed', 'label': 'Both', 'description': 'A mix of decluttering and a style refresh.'},
+    {'key': 'declutter', 'label': 'Declutter First', 'description': 'Focus on sorting what to keep, donate, and let go of.'},
+    {'key': 'systems', 'label': 'Better Systems', 'description': 'Keep what you have, but give everything a designated home.'},
+    {'key': 'mixed', 'label': 'Both', 'description': 'Pare down first, then build a system around what stays.'},
 ]
 
 
@@ -2600,8 +2610,9 @@ def confirm_direction():
     """
     User has picked one of the path_options offered at the end of the
     Natasha chat. Stores that choice on the area, then asks Gemini for 2-3
-    SPECIFIC follow-up photo angles suited to that direction (e.g. mess
-    cleanup -> the clutter itself; style refresh -> a wide styled shot) so
+    SPECIFIC follow-up photo angles suited to that direction (e.g.
+    decluttering -> the overloaded spot itself; systems -> the shelves and
+    containers things would live in) so
     the user can be guided to take more targeted photos before the final
     recommendation is generated, per the "guide the user to take more
     specific photos after the chatbot" requirement.
@@ -2848,11 +2859,10 @@ def get_recommendations():
         
         session_id = data.get('session_id')
         user_intention = data.get('user_intention')
-        # Optional: organization priorities / visual style from the priorities
-        # step. If the frontend doesn't send them yet, fall back to whatever
-        # was saved earlier in the session (or none at all).
+        # Optional: organization priorities from the priorities step. If
+        # the frontend doesn't send them yet, fall back to whatever was
+        # saved earlier in the session (or none at all).
         organization_priorities = data.get('organization_priorities')
-        visual_style = data.get('visual_style')
         
         logger.info(f"📥 Received recommendations request: session={session_id}")
         
@@ -2879,14 +2889,11 @@ def get_recommendations():
         current_room = session['rooms'][-1]
         current_area = current_room['areas'][-1]
 
-        # Persist priorities/visual style at the session level so later steps
-        # (and the final report) can reuse them even if this request omits them.
+        # Persist priorities at the session level so later steps (and the
+        # final report) can reuse them even if this request omits them.
         if organization_priorities is not None:
             session['organization_priorities'] = organization_priorities
-        if visual_style is not None:
-            session['visual_style'] = visual_style
         organization_priorities = session.get('organization_priorities')
-        visual_style = session.get('visual_style')
 
         # Look up any measurements saved earlier for this specific area (Task 1
         # fix: this used to never be read here, so measurements only ever
@@ -2903,7 +2910,6 @@ def get_recommendations():
             current_area.get('photo_labels', []),
             measurement=area_measurement,
             priorities=organization_priorities,
-            visual_style=visual_style,
             tier=session.get('user_tier', 'paid'),
             # CHANGED (bug fix): used to pass only the short key
             # (e.g. "declutter"), never the descriptive label/description

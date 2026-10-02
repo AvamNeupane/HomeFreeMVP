@@ -1,9 +1,14 @@
 /**
- * Priorities Screen — what matters most to the user for this area, and
- * optionally a preferred visual style. Both are stored in appData and sent
- * to the backend alongside the user's written intention, so the AI
- * recommendation can actually reflect them (see app.py's
+ * Priorities Screen — what matters most to the user for this area. Stored
+ * in appData and sent to the backend alongside the user's written
+ * intention, so the AI recommendation can actually reflect it (see app.py's
  * _format_priorities_block / generate_area_recommendations).
+ *
+ * CHANGED (scope): this screen also had a "Visual style (optional)" picker
+ * (White / Modern / Wood / Minimal / Colorful) and a "Looks beautiful"
+ * priority, both of which fed a "Preferred visual style" line into the AI
+ * prompts. This is an organizing app, not an interior design one, so both
+ * are gone — every remaining priority is about how the space functions.
  */
 
 import React, { useState } from 'react';
@@ -18,14 +23,11 @@ const PRIORITY_OPTIONS = [
   'Easy maintenance',
   'Budget friendly',
   'Family friendly',
-  'Looks beautiful',
+  'Easy to find things',
 ];
-
-const STYLE_OPTIONS = ['White', 'Modern', 'Wood', 'Minimal', 'Colorful'];
 
 export default function PrioritiesScreen({ goToScreen, updateData, appData }) {
   const [priorities, setPriorities] = useState(appData.organizationPriorities || []);
-  const [visualStyle, setVisualStyle] = useState(appData.visualStyle || null);
 
   const togglePriority = (option) => {
     setPriorities((prev) =>
@@ -33,15 +35,8 @@ export default function PrioritiesScreen({ goToScreen, updateData, appData }) {
     );
   };
 
-  const selectStyle = (option) => {
-    setVisualStyle((prev) => (prev === option ? null : option));
-  };
-
   const handleContinue = () => {
-    updateData({
-      organizationPriorities: priorities,
-      visualStyle: visualStyle,
-    });
+    updateData({ organizationPriorities: priorities });
     goToScreen('intentionQuestion');
   };
 
@@ -75,27 +70,6 @@ export default function PrioritiesScreen({ goToScreen, updateData, appData }) {
           })}
         </View>
 
-        <View style={styles.header}>
-          <Text style={styles.subtitle2}>Visual style (optional)</Text>
-        </View>
-
-        <View style={styles.chipGrid}>
-          {STYLE_OPTIONS.map((option) => {
-            const selected = visualStyle === option;
-            return (
-              <TouchableOpacity
-                key={option}
-                style={[styles.chip, selected && styles.chipSelected]}
-                onPress={() => selectStyle(option)}
-                activeOpacity={0.7}
-              >
-                <Text style={[styles.chipText, selected && styles.chipTextSelected]}>
-                  {option}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
       </ScrollView>
 
       <View style={styles.footer}>
@@ -135,11 +109,6 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.bodyRegular,
     color: Colors.textSecondary,
     textAlign: 'center',
-  },
-  subtitle2: {
-    fontSize: 16,
-    fontFamily: Fonts.bodySemiBold,
-    color: Colors.accent,
   },
   chipGrid: {
     flexDirection: 'row',

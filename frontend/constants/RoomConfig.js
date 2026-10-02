@@ -108,12 +108,6 @@ export const ROOM_TYPES = {
         title: 'Storage & Shelving',
         description: 'Show bookcases and storage units. Include a wide shot plus specific close-ups of crowded shelves, if applicable.',
         icon: '📚'
-      },
-      {
-        label: 'decor_details',
-        title: 'Decor Details',
-        description: 'Capture artwork and decorative elements.',
-        icon: '🖼️'
       }
     ]
   },

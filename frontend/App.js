@@ -6,7 +6,7 @@
  * CHANGED (Task 7): initial screen is now 'consent', not 'welcome'.
  * CHANGED (Task 5): registered the new PrioritiesScreen.
  * CHANGED (Task 4/5/7): new appData fields — consentGiven, selectedItems,
- * organizationPriorities, visualStyle.
+ * organizationPriorities.
  * CHANGED (Back navigation): goToScreen now pushes onto a history stack, and
  * a new goBack()/canGoBack pair is included in sharedProps so every screen
  * can offer a working "Back" button without each screen managing its own
@@ -184,7 +184,6 @@ export default function App() {
     currentQuestion: null,
     currentContext: null,
     organizationPriorities: [],
-    visualStyle: null,
     currentRecommendation: null,
     allRecommendations: [],
     areaMeasurements: {},

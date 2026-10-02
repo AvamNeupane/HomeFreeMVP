@@ -56,7 +56,7 @@ export default function WelcomeScreen({ goToScreen, appData, resetAppData }) {
           <Text style={styles.subtitle}>
             {hasProgress
               ? 'Pick up where you left off, or start something new.'
-              : "Let's organize your space and make it beautiful"}
+              : "Let's organize your space, one area at a time"}
           </Text>
         </View>
 

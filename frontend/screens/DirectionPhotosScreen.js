@@ -2,7 +2,7 @@
  * Direction Photos Screen — shown right after the user picks a direction
  * at the end of Natasha's chat (see IntentionQuestionScreen). Guides them
  * to take a couple of MORE SPECIFIC photos suited to that direction (e.g.
- * "Mess Cleanup" -> the messiest spot; "Style Refresh" -> a wide shot
+ * "Declutter First" -> the most overloaded spot; "Better Systems" -> a shot
  * showing the color/material palette), per the requirement that the user
  * be guided to more targeted photos after the chat rather than jumping
  * straight to a recommendation off the original wide shots alone.
@@ -116,7 +116,6 @@ export default function DirectionPhotosScreen({
           session_id: sessionId,
           user_intention: appData.chatIntention || appData.chatPathLabel || 'Organize this area',
           organization_priorities: appData.organizationPriorities || [],
-          visual_style: appData.visualStyle || null,
         }),
       });
       const data = await response.json();
